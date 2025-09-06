@@ -1,32 +1,131 @@
+# Hologram Memory
 
-# Holographic Memory (Minimal Starter)
+A minimal **holographic memory starter kit** that demonstrates how to anchor multi-modal traces (text + images) to **glyphs** and retrieve them with semantic search.  
+Built with a tiny in-memory store + OpenCLIP for text ↔ image alignment.
 
-A tiny, hackable starter kit that shows how to use **glyphs as anchors** over multi‑modal traces
-(tokens, text chunks, images) and back them with simple embeddings. The goal is to keep code small and clear.
+---
 
-**Key idea:** Don't index everything flat. Create *glyphs* (symbolic anchors) and attach traces under them.
-Retrieve via glyph → then pull associated traces (and their vectors).
+## Features
+- **Glyph Anchors** → symbolic IDs (🝞, 🜂, `memory:gravity`, etc.) that link traces.
+- **Text & Image Embeddings**
+  - Hash-based encoders for lightweight demos.
+  - [OpenCLIP](https://github.com/mlfoundations/open_clip) for real text–image semantic search.
+- **Memory Store**
+  - In-memory vector index with cosine similarity.
+  - Drop-in replacement for FAISS/ScaNN if scaling.
+- **APIs**
+  - `add_text()`, `add_image_path()`, `recall_glyph()`, `search_text()`, `search_image_path()`.
+- **Demos**
+  - `demo.py` → text only.
+  - `demo_clip.py` → text → image retrieval.
+  - `demo_img2img.py` → image → image similarity.
 
-This repo avoids heavy deps: it uses NumPy and a tiny in‑memory cosine index.
-Swap `SimpleIndex` with FAISS/ScaNN later if you need scale.
+---
 
-## Layout
-- `hologram/config.py` – knobs & vector dims
-- `hologram/embeddings.py` – pluggable embedding adapters (toy hashing model included)
-- `hologram/store.py` – in‑memory registry + vector index (replace with DB + FAISS later)
-- `hologram/glyphs.py` – glyph registry & linking traces
-- `hologram/api.py` – simple write/read operations
-- `demo.py` – runnable demo
+## Setup
 
-## Run
+### 1. Clone the repo
+```bash
+git clone https://github.com/<your-username>/hologram.git
+cd hologram
+````
+
+### 2. Create a venv
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 3. Install requirements
+
+For text hashing demo only:
+
+```bash
+pip install numpy
+```
+
+For CLIP (semantic search):
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install pillow
+pip install open_clip_torch
+```
+
+*(Replace CPU wheels with CUDA wheels if you have a GPU.)*
+
+---
+
+## Usage
+
+### Text–only demo
+
 ```bash
 python demo.py
 ```
 
-Expected: it will create a few glyphs, attach text/image traces, and run example queries.
+Output:
 
-## Upgrade Path (when you're ready)
-- Replace `SimpleIndex` with FAISS + HNSW and persist vectors to disk.
-- Store glyphs/traces in SQLite or Postgres (see `store.py` for the in‑mem schema).
-- Add a CLIP/Image encoder in `embeddings.py` for image vectors.
-- Add a RAG step after recall for synthesis (e.g., call your LLM with the retrieved traces).
+```
+=== Recall: glyph 🝞 ===
+- Memory is gravity. Collapse deferred.
+- Glyphs compress drift into anchors.
+
+=== Search: "gravity wells" ===
+[text:...] score=0.77 :: Wounds, dreams, fleeting joys are competing gravity wells.
+```
+
+### Text → Image demo
+
+Put images in `./data/` (e.g. `cat.jpg`, `dog.jpg`):
+
+```bash
+python demo_clip.py
+```
+
+Expected: `"a photo of a cat"` ranks `cat.jpg` above `dog.jpg`.
+
+### Image → Image demo
+
+```bash
+python demo_img2img.py
+```
+
+Expected: `cat2.jpg` is closer to `cat1.jpg` than `dog1.jpg`.
+
+---
+
+## Repo Layout
+
+```
+hologram/         # core package
+  config.py       # constants
+  embeddings.py   # hashing + CLIP encoders
+  store.py        # memory store + vector index
+  glyphs.py       # glyph registry
+  api.py          # main Hologram API
+demo.py           # text-only demo
+demo_clip.py      # text→image demo
+demo_img2img.py   # image→image demo
+```
+
+---
+
+## Roadmap
+
+* Persistence layer (SQLite / Postgres).
+* Scale index with FAISS / ScaNN.
+* Multi-modal traces beyond text & image.
+* RAG integration (LLM synthesis over recalled traces).
+
+---
+
+## License
+
+MIT
+
+---
+
+👉 Want me to also generate a **`requirements.txt`** so others can `pip install -r requirements.txt` instead of manually typing packages?
+```
