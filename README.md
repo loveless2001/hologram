@@ -126,6 +126,3 @@ demo_img2img.py   # image→image demo
 MIT
 
 ---
-
-👉 Want me to also generate a **`requirements.txt`** so others can `pip install -r requirements.txt` instead of manually typing packages?
-```
