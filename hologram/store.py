@@ -1,5 +1,7 @@
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
@@ -83,3 +85,61 @@ class MemoryStore:
     # --- Search ---
     def search_traces(self, query_vec, top_k=5):
         return self.index.search(query_vec, top_k=top_k)
+
+    # --- Persistence ---
+    def save(self, path: str) -> None:
+        path_obj = Path(path)
+        path_obj.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "vec_dim": self.vec_dim,
+            "traces": [
+                {
+                    "trace_id": t.trace_id,
+                    "kind": t.kind,
+                    "content": t.content,
+                    "vec": t.vec.tolist(),
+                    "meta": t.meta,
+                }
+                for t in self.traces.values()
+            ],
+            "glyphs": [
+                {
+                    "glyph_id": g.glyph_id,
+                    "title": g.title,
+                    "notes": g.notes,
+                    "trace_ids": g.trace_ids,
+                }
+                for g in self.glyphs.values()
+            ],
+        }
+        path_obj.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: str) -> "MemoryStore":
+        path_obj = Path(path)
+        data = json.loads(path_obj.read_text(encoding="utf-8"))
+
+        vec_dim = int(data.get("vec_dim"))
+        store = cls(vec_dim=vec_dim)
+
+        for t_data in data.get("traces", []):
+            vec = np.array(t_data["vec"], dtype=np.float32)
+            trace = Trace(
+                trace_id=t_data["trace_id"],
+                kind=t_data["kind"],
+                content=t_data["content"],
+                vec=vec,
+                meta=t_data.get("meta", {}),
+            )
+            store.add_trace(trace)
+
+        for g_data in data.get("glyphs", []):
+            glyph = Glyph(
+                glyph_id=g_data["glyph_id"],
+                title=g_data.get("title", g_data["glyph_id"]),
+                notes=g_data.get("notes", ""),
+                trace_ids=list(g_data.get("trace_ids", [])),
+            )
+            store.glyphs[glyph.glyph_id] = glyph
+
+        return store

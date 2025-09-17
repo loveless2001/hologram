@@ -8,17 +8,20 @@ Built with a tiny in-memory store + OpenCLIP for text ↔ image alignment.
 ## Features
 - **Glyph Anchors** → symbolic IDs (🝞, 🜂, `memory:gravity`, etc.) that link traces.
 - **Text & Image Embeddings**
-  - Hash-based encoders for lightweight demos.
+  - Hash-based encoders for lightweight demos (no GPU required).
   - [OpenCLIP](https://github.com/mlfoundations/open_clip) for real text–image semantic search.
 - **Memory Store**
   - In-memory vector index with cosine similarity.
+  - JSON persistence via `Hologram.save(...)` / `Hologram.load(...)`.
   - Drop-in replacement for FAISS/ScaNN if scaling.
 - **APIs**
   - `add_text()`, `add_image_path()`, `recall_glyph()`, `search_text()`, `search_image_path()`.
+- **Chat Orchestration**
+  - `chat_cli.py` spins up a CLI chat that keeps per-session context and cross-session recall via holographic memory.
 - **Demos**
   - `demo.py` → text only.
-  - `demo_clip.py` → text → image retrieval.
-  - `demo_img2img.py` → image → image similarity.
+  - `demo_clip.py` → text → image retrieval (ships with tiny sample PNGs).
+  - `demo_img2img.py` → image → image similarity (falls back to hashing when CLIP is unavailable).
 
 ---
 
@@ -78,13 +81,16 @@ Output:
 
 ### Text → Image demo
 
-Put images in `./data/` (e.g. `cat.jpg`, `dog.jpg`):
+Sample placeholders live in `./data/` (`cat.png`, `dog.png`). Replace them with
+your own images for better results.
 
 ```bash
 python demo_clip.py
 ```
 
-Expected: `"a photo of a cat"` ranks `cat.jpg` above `dog.jpg`.
+Expected: `"a photo of a cat"` ranks `cat.png` above `dog.png` when CLIP is
+available. Without CLIP the hashing fallback still works, but produces
+deterministic mock scores.
 
 ### Image → Image demo
 
@@ -92,7 +98,24 @@ Expected: `"a photo of a cat"` ranks `cat.jpg` above `dog.jpg`.
 python demo_img2img.py
 ```
 
-Expected: `cat2.jpg` is closer to `cat1.jpg` than `dog1.jpg`.
+This script runs two searches – one using the bundled cat sample, the other the
+dog sample – and prints the ranked matches. When CLIP dependencies are missing
+the demo automatically drops back to the hashing encoders.
+
+### Chat with OpenAI (or hashing fallback)
+
+```bash
+python chat_cli.py --session alice
+```
+
+This launches a simple CLI chat:
+
+- Stores every turn into holographic memory and appends a JSONL chat log in `./chatlogs/`.
+- Retrieves up to `--session-window` recent turns for continuity.
+- Surfaces up to `--cross-session-k` semantically similar memories from other sessions.
+- Uses the `OPENAI_API_KEY` environment variable by default; falls back to an echo bot when not configured.
+
+Add `--use-clip` to initialise the chat memory with OpenCLIP embeddings instead of the hashing fallback. The global memory file defaults to `memory_store.json` and is updated on exit.
 
 ---
 
@@ -105,9 +128,12 @@ hologram/         # core package
   store.py        # memory store + vector index
   glyphs.py       # glyph registry
   api.py          # main Hologram API
+  demo_clip.py    # reusable text→image demo logic
+chat_cli.py       # CLI harness with OpenAI/echo providers
+data/             # tiny sample PNGs (cat/dog)
 demo.py           # text-only demo
-demo_clip.py      # text→image demo
-demo_img2img.py   # image→image demo
+demo_clip.py      # text→image demo entry point
+demo_img2img.py   # image→image demo entry point
 ```
 
 ---

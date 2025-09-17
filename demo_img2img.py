@@ -1,12 +1,12 @@
-"""Text-to-image retrieval demo using CLIP (falls back to hashing)."""
+"""Image-to-image retrieval demo using holographic memory."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from .api import Hologram
+from hologram import Hologram
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
 def _ensure_samples() -> tuple[Path, Path]:
@@ -17,7 +17,7 @@ def _ensure_samples() -> tuple[Path, Path]:
         joined = ", ".join(str(p) for p in missing)
         raise SystemExit(
             f"Missing sample images: {joined}. "
-            "Add your own PNGs or supply your own dataset."
+            "Add your own PNGs or rerun the repo setup steps."
         )
     return cat, dog
 
@@ -38,16 +38,16 @@ def main() -> None:
     holo.glyphs.create("image:cat", title="Sample cat image")
     holo.glyphs.create("image:dog", title="Sample dog image")
 
-    holo.add_image_path("image:cat", str(cat), label="cat sample")
-    holo.add_image_path("image:dog", str(dog), label="dog sample")
+    holo.add_image_path("image:cat", str(cat))
+    holo.add_image_path("image:dog", str(dog))
 
-    print("\n=== Text → Image: 'a photo of a cat' ===")
-    hits = holo.search_text("a photo of a cat", top_k=5)
+    print("\n=== Image → Image: using cat sample ===")
+    hits = holo.search_image_path(str(cat), top_k=5)
     for trace, score in hits:
         print(holo.summarize_hit(trace, score))
 
-    print("\n=== Text → Image: 'a photo of a dog' ===")
-    hits = holo.search_text("a photo of a dog", top_k=5)
+    print("\n=== Image → Image: using dog sample ===")
+    hits = holo.search_image_path(str(dog), top_k=5)
     for trace, score in hits:
         print(holo.summarize_hit(trace, score))
 

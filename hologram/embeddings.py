@@ -4,8 +4,16 @@ import numpy as np
 from .config import VECTOR_DIM, SEED
 
 import PIL.Image as Image
-import torch
-import open_clip  # re-exported at bottom
+
+try:  # Optional heavy deps; fallback encoders do not require them
+    import torch  # type: ignore
+except ImportError:  # pragma: no cover - exercised only when torch missing
+    torch = None  # type: ignore
+
+try:
+    import open_clip  # type: ignore  # re-exported at bottom
+except ImportError:  # pragma: no cover - exercised only when open_clip missing
+    open_clip = None  # type: ignore
 
 
 # -------------------------
@@ -73,6 +81,13 @@ class ImageCLIP:
         pretrained: str = "laion2b_s34b_b79k",
         device: Optional[str] = None,
     ):
+        if torch is None or open_clip is None:
+            raise RuntimeError(
+                "open_clip and torch are required for CLIP-based image encoding. "
+                "Install open-clip-torch and torch, or use the hashing fallback via"
+                " Hologram.init(use_clip=False)."
+            )
+
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         if model is None or preprocess is None:
             self.model, _, self.preprocess = open_clip.create_model_and_transforms(
@@ -83,13 +98,18 @@ class ImageCLIP:
             self.preprocess = preprocess
         self.model.eval()
 
-    @torch.no_grad()
     def encode_path(self, path: str) -> np.ndarray:
+        if torch is None:
+            raise RuntimeError(
+                "torch is required for CLIP-based image encoding. Install torch or "
+                "use Hologram.init(use_clip=False)."
+            )
         # use context manager to avoid file handle leaks
         with Image.open(path) as img:
             img = img.convert("RGB")
-            tensor = self.preprocess(img).unsqueeze(0).to(self.device)
-        feats = self.model.encode_image(tensor)
+            with torch.no_grad():
+                tensor = self.preprocess(img).unsqueeze(0).to(self.device)
+                feats = self.model.encode_image(tensor)
         feats = feats / feats.norm(dim=-1, keepdim=True)
         return feats.squeeze(0).detach().cpu().numpy().astype("float32")
 
@@ -99,14 +119,25 @@ class TextCLIP:
     Text encoder using the SAME OpenCLIP model as ImageCLIP.
     """
     def __init__(self, model: torch.nn.Module, device: Optional[str] = None):
+        if torch is None:
+            raise RuntimeError(
+                "torch is required for CLIP-based text encoding. Install torch or "
+                "use the hashing fallback via Hologram.init(use_clip=False)."
+            )
+
         self.model = model
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model.eval()
 
-    @torch.no_grad()
     def encode(self, text: str) -> np.ndarray:
-        toks = open_clip.tokenize([text]).to(self.device)
-        feats = self.model.encode_text(toks)
+        if torch is None or open_clip is None:
+            raise RuntimeError(
+                "open_clip and torch are required for CLIP tokenization. Install the"
+                " dependencies or use Hologram.init(use_clip=False)."
+            )
+        with torch.no_grad():
+            toks = open_clip.tokenize([text]).to(self.device)
+            feats = self.model.encode_text(toks)
         feats = feats / feats.norm(dim=-1, keepdim=True)
         return feats.squeeze(0).detach().cpu().numpy().astype("float32")
 
