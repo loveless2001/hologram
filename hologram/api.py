@@ -1,10 +1,13 @@
-from typing import Any, Optional
+# hologram/api.py
+from __future__ import annotations
 from dataclasses import dataclass
+from typing import Any, Optional, List, Tuple
+import numpy as np
 
-try:  # torch is only required when using CLIP encoders
-    import torch  # type: ignore
-except ImportError:  # pragma: no cover - triggered only when torch missing
-    torch = None  # type: ignore
+try:
+    import torch
+except ImportError:  # pragma: no cover
+    torch = None
 
 from .store import MemoryStore, Trace
 from .glyphs import GlyphRegistry
@@ -17,35 +20,45 @@ from .embeddings import (
     open_clip,
     get_clip_embed_dim,
 )
+from .gravity import GravityField  # ← integrate Memory Gravity
+
 
 @dataclass
 class Hologram:
+    """
+    Unified holographic memory system:
+    - encodes text/images into vectors
+    - anchors them in a gravitational vector field
+    - manages symbolic traces via GlyphRegistry
+    """
     store: MemoryStore
     glyphs: GlyphRegistry
     text_encoder: Any
     image_encoder: Any
+    field: Optional[GravityField] = None
 
+    # --- Initialization ---
     @classmethod
     def init(
         cls,
         model_name: str = "ViT-B-32",
         pretrained: str = "laion2b_s34b_b79k",
         use_clip: bool = True,
+        use_gravity: bool = True,
     ):
+        # Encoder setup
         if use_clip:
             if torch is None or open_clip is None:
                 raise RuntimeError(
                     "CLIP initialization requested but torch/open_clip are unavailable. "
-                    "Install the dependencies or set use_clip=False for hashing fallback."
+                    "Install dependencies or set use_clip=False for hashing fallback."
                 )
             device = "cuda" if torch.cuda.is_available() else "cpu"
             model, _, preprocess = open_clip.create_model_and_transforms(
                 model_name, pretrained=pretrained, device=device
             )
-
             embed_dim = get_clip_embed_dim(model)
             store = MemoryStore(vec_dim=embed_dim)
-
             text_enc = TextCLIP(model=model, device=device)
             img_enc = ImageCLIP(model=model, preprocess=preprocess, device=device)
         else:
@@ -53,29 +66,36 @@ class Hologram:
             text_enc = TextHasher(dim=VECTOR_DIM)
             img_enc = ImageStub(dim=VECTOR_DIM)
 
+        field = GravityField(dim=store.vec_dim) if use_gravity else None
+
         return cls(
             store=store,
             glyphs=GlyphRegistry(store),
             text_encoder=text_enc,
             image_encoder=img_enc,
+            field=field,
         )
 
-    # --- Write ---
+    # --- Write operations ---
     def add_text(self, glyph_id: str, text: str, trace_id: Optional[str] = None, **meta):
         trace_id = trace_id or f"text:{abs(hash(text))%10**10}"
         vec = self.text_encoder.encode(text)
         tr = Trace(trace_id=trace_id, kind="text", content=text, vec=vec, meta=meta)
         self.glyphs.attach_trace(glyph_id, tr)
+        if self.field:
+            self.field.add(trace_id, vec)
         return trace_id
 
     def add_image_path(self, glyph_id: str, path: str, trace_id: Optional[str] = None, **meta):
         trace_id = trace_id or f"image:{abs(hash(path))%10**10}"
-        vec = self.image_encoder.encode_path(path)  # raises if file unreadable
+        vec = self.image_encoder.encode_path(path)
         tr = Trace(trace_id=trace_id, kind="image", content=path, vec=vec, meta=meta)
         self.glyphs.attach_trace(glyph_id, tr)
+        if self.field:
+            self.field.add(trace_id, vec)
         return trace_id
 
-    # --- Read ---
+    # --- Read operations ---
     def recall_glyph(self, glyph_id: str):
         return self.glyphs.recall(glyph_id)
 
@@ -83,10 +103,21 @@ class Hologram:
         qv = self.text_encoder.encode(query)
         return self.glyphs.search_across(qv, top_k=top_k)
 
-    # Optional: image→image retrieval
     def search_image_path(self, path: str, top_k: int = 5):
         qv = self.image_encoder.encode_path(path)
         return self.glyphs.search_across(qv, top_k=top_k)
+
+    # --- Field analytics ---
+    def field_state(self):
+        """Return current gravitational field projection if active."""
+        if not self.field:
+            return None
+        return self.field.project2d()
+
+    def decay(self, steps: int = 1):
+        """Advance field decay (Memory Gravity loss)."""
+        if self.field:
+            self.field.step_decay(steps=steps)
 
     # --- Utility ---
     def summarize_hit(self, trace: Trace, score: float) -> str:
@@ -104,6 +135,7 @@ class Hologram:
         model_name: str = "ViT-B-32",
         pretrained: str = "laion2b_s34b_b79k",
         use_clip: bool = True,
+        use_gravity: bool = True,
     ):
         store = MemoryStore.load(path)
 
@@ -129,9 +161,12 @@ class Hologram:
             text_enc = TextHasher(dim=store.vec_dim)
             img_enc = ImageStub(dim=store.vec_dim)
 
+        field = GravityField(dim=store.vec_dim) if use_gravity else None
+
         return cls(
             store=store,
             glyphs=GlyphRegistry(store),
             text_encoder=text_enc,
             image_encoder=img_enc,
+            field=field,
         )

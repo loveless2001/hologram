@@ -1,0 +1,19 @@
+diff --git /dev/null b/requirements.txt
+index 0000000000000000000000000000000000000000..d6eb5231beee3f7472d877a7074413883d88a5af 100644
+--- /dev/null
++++ b/requirements.txt
+@@ -0,0 +1,14 @@
++# Core numerical + image dependencies
++numpy>=1.21
++pillow>=9.0
++
++# OpenAI provider for chat_cli.py (optional but recommended)
++openai>=1.6
++
++# CLIP stack for text↔image retrieval (requires PyTorch)
++open_clip_torch>=2.0
++torch>=2.0
++torchvision>=0.15
++
++# Developer tooling
++pytest>=7.0

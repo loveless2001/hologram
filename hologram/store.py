@@ -5,6 +5,18 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
+# store.py (MemoryStore)
+from gravity import Gravity
+
+class MemoryStore:
+    def __init__(self, vec_dim: int = 512):
+        self.vec_dim = vec_dim
+        self.sim = Gravity(dim=vec_dim)   # integrate gravity physics
+
+    def add(self, trace):
+        self.sim.add_concept(trace.trace_id, vec=trace.vec)
+        # optional: return field drift info
+
 # --- Data model ---
 @dataclass
 class Trace:
