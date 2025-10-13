@@ -1,154 +1,150 @@
 # Hologram Memory
 
-A minimal **holographic memory starter kit** that demonstrates how to anchor multi-modal traces (text + images) to **glyphs** and retrieve them with semantic search.  
-Built with a tiny in-memory store + OpenCLIP for text ↔ image alignment.
+A holographic memory sandbox that anchors multi-modal traces to glyphs, stores them in a lightweight vector index, and experiments with “memory gravity” fields to model concept drift.
 
 ---
 
-## Features
-- **Glyph Anchors** → symbolic IDs (🝞, 🜂, `memory:gravity`, etc.) that link traces.
-- **Text & Image Embeddings**
-  - Hash-based encoders for lightweight demos (no GPU required).
-  - [OpenCLIP](https://github.com/mlfoundations/open_clip) for real text–image semantic search.
-- **Memory Store**
-  - In-memory vector index with cosine similarity.
-  - JSON persistence via `Hologram.save(...)` / `Hologram.load(...)`.
-  - Drop-in replacement for FAISS/ScaNN if scaling.
-- **APIs**
-  - `add_text()`, `add_image_path()`, `recall_glyph()`, `search_text()`, `search_image_path()`.
-- **Chat Orchestration**
-  - `chat_cli.py` spins up a CLI chat that keeps per-session context and cross-session recall via holographic memory.
-- **Demos**
-  - `demo.py` → text only.
-  - `demo_clip.py` → text → image retrieval (ships with tiny sample PNGs).
-  - `demo_img2img.py` → image → image similarity (falls back to hashing when CLIP is unavailable).
+## Highlights
+- Glyph anchors (`🝞`, `🜂`, `memory:gravity`, …) collect related traces across sessions.
+- Dual encoder stack: hashing fallback works everywhere; OpenCLIP adds semantic text ↔ image retrieval.
+- Gravity field powered by FAISS to visualise resonance and decay between stored concepts.
+- JSON-backed memory store with glyph registry, summarisation helpers, and optional persistence.
+- Chat orchestration (`chat_cli.py`) with session logs plus a tiny FastAPI surface for programmatic access.
 
 ---
 
-## Setup
+## Components
+- `hologram/api.py` – public `Hologram` API (`add_text`, `add_image_path`, search, persistence).
+- `hologram/chatbot.py` – chat memory, provider abstractions, CLI orchestration helpers.
+- `hologram/gravity.py` – concept drift simulation and FAISS-backed `GravityField`.
+- `hologram/embeddings.py` – hashing encoders and CLIP wrappers (text and image).
+- `chat_cli.py` – command-line chat demo that keeps cross-session context.
+- `api_server/main.py` – FastAPI service exposing `/add_text` + `/search` endpoints.
+- `demo.py`, `demo_clip.py`, `demo_img2img.py` – runnable examples (text-only, text→image, image→image).
+- `tests/test_chatbot.py` – regression coverage for the chat memory + persistence path.
 
-### 1. Clone the repo
+---
+
+## Installation
+
 ```bash
 git clone https://github.com/<your-username>/hologram.git
 cd hologram
-````
-
-### 2. Create a venv
-
-```bash
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3. Install requirements
+### Core dependencies
 
-For text hashing demo only:
-
-```bash
-pip install numpy
-```
-
-For CLIP (semantic search):
+`GravityField` imports FAISS; install it even when using the hashing encoders:
 
 ```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-pip install pillow
-pip install open_clip_torch
+pip install numpy faiss-cpu
 ```
 
-*(Replace CPU wheels with CUDA wheels if you have a GPU.)*
+If FAISS wheels are not available on your platform, initialise with `Hologram.init(use_gravity=False)`.
+
+### Optional extras
+- CLIP stack (semantic text ↔ image):  
+  `pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu`  
+  `pip install pillow open_clip_torch`
+- Chat providers: `pip install openai`
+- REST API: `pip install fastapi uvicorn[standard]`
+- Development helpers: `pip install pytest`
+
+*(Switch to CUDA wheels if you have a GPU.)*
 
 ---
 
-## Usage
+## Quickstart (Python)
 
-### Text–only demo
+```python
+from hologram import Hologram
 
-```bash
-python demo.py
+holo = Hologram.init(use_clip=False)  # add use_gravity=False if FAISS is unavailable
+holo.glyphs.create("🝞", title="Curvature Anchor")
+
+trace_id = holo.add_text("🝞", "Memory is gravity. Collapse deferred.")
+hits = holo.search_text("gravity wells", top_k=3)
+
+for trace, score in hits:
+    print(holo.summarize_hit(trace, score))
+
+holo.save("memory_store.json")
 ```
 
-Output:
-
-```
-=== Recall: glyph 🝞 ===
-- Memory is gravity. Collapse deferred.
-- Glyphs compress drift into anchors.
-
-=== Search: "gravity wells" ===
-[text:...] score=0.77 :: Wounds, dreams, fleeting joys are competing gravity wells.
-```
-
-### Text → Image demo
-
-Sample placeholders live in `./data/` (`cat.png`, `dog.png`). Replace them with
-your own images for better results.
-
-```bash
-python demo_clip.py
-```
-
-Expected: `"a photo of a cat"` ranks `cat.png` above `dog.png` when CLIP is
-available. Without CLIP the hashing fallback still works, but produces
-deterministic mock scores.
-
-### Image → Image demo
-
-```bash
-python demo_img2img.py
-```
-
-This script runs two searches – one using the bundled cat sample, the other the
-dog sample – and prints the ranked matches. When CLIP dependencies are missing
-the demo automatically drops back to the hashing encoders.
-
-### Chat with OpenAI (or hashing fallback)
-
-```bash
-python chat_cli.py --session alice
-```
-
-This launches a simple CLI chat:
-
-- Stores every turn into holographic memory and appends a JSONL chat log in `./chatlogs/`.
-- Retrieves up to `--session-window` recent turns for continuity.
-- Surfaces up to `--cross-session-k` semantically similar memories from other sessions.
-- Uses the `OPENAI_API_KEY` environment variable by default; falls back to an echo bot when not configured.
-
-Add `--use-clip` to initialise the chat memory with OpenCLIP embeddings instead of the hashing fallback. The global memory file defaults to `memory_store.json` and is updated on exit.
+Reload later with `Hologram.load("memory_store.json", use_clip=False)`.
 
 ---
 
-## Repo Layout
+## Demos
+- Text only: `python demo.py`
+- Text → image: `python demo_clip.py`
+- Image → image: `python demo_img2img.py`
+
+Sample PNGs live in `data/`. Replace them with your own assets for better matches. CLIP demos automatically fall back to hashing when dependencies are missing.
+
+---
+
+## Chat CLI
+
+```bash
+python chat_cli.py --session alice --memory memory_store.json
+```
+
+- Stores each turn in holographic memory and appends JSONL logs under `chatlogs/`.
+- Replays `--session-window` recent turns and pulls cross-session memories via semantic search.
+- Uses `OPENAI_API_KEY` by default; falls back to an echo provider when the key or `openai` lib is missing.
+- Add `--use-clip` to run the chat with CLIP encoders.
+
+---
+
+## FastAPI Surface
+
+```bash
+uvicorn api_server.main:app --reload
+```
+
+- `POST /add_text?glyph_id=<id>&text=<content>` → stores a trace and returns the generated `trace_id`.
+- `GET /search?q=<query>&top_k=5` → returns ranked traces as `{trace, score}` dictionaries.
+
+Both endpoints rely on the in-process `Hologram`; adjust `Hologram.init(...)` in `api_server/main.py` to toggle CLIP or gravity.
+
+---
+
+## Tests
+
+```bash
+pip install pytest
+pytest
+```
+
+Tests cover chat session logging, the in-memory store, and JSON persistence.
+
+---
+
+## Repository Layout
 
 ```
-hologram/         # core package
-  config.py       # constants
-  embeddings.py   # hashing + CLIP encoders
-  store.py        # memory store + vector index
-  glyphs.py       # glyph registry
-  api.py          # main Hologram API
-  demo_clip.py    # reusable text→image demo logic
-chat_cli.py       # CLI harness with OpenAI/echo providers
-data/             # tiny sample PNGs (cat/dog)
-demo.py           # text-only demo
-demo_clip.py      # text→image demo entry point
-demo_img2img.py   # image→image demo entry point
+hologram/            core package (API, embeddings, gravity, chatbot, demos)
+api_server/          FastAPI entry point
+chat_cli.py          chat demo (OpenAI or echo fallback)
+data/                sample PNGs (cat.png, dog.png)
+demo.py              text-only walkthrough
+demo_clip.py         text→image entry point
+demo_img2img.py      image→image entry point
+tests/               pytest suite
 ```
 
 ---
 
-## Roadmap
-
-* Persistence layer (SQLite / Postgres).
-* Scale index with FAISS / ScaNN.
-* Multi-modal traces beyond text & image.
-* RAG integration (LLM synthesis over recalled traces).
+## Troubleshooting
+- `ModuleNotFoundError: faiss`: install `faiss-cpu` (or GPU variant) or call `Hologram.init(use_gravity=False)`.
+- `RuntimeError: open_clip`: only enable CLIP (`--use-clip`, `use_clip=True`) when `torch` + `open_clip_torch` + `pillow` are installed.
+- Missing sample images: add your own `cat.png` / `dog.png` (or tweak the demos to point at your data).
 
 ---
 
 ## License
 
 MIT
-
----

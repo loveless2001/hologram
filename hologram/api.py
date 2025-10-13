@@ -2,6 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional, List, Tuple
+from .smi import SymbolicMemoryInterface
 import numpy as np
 
 try:
@@ -170,3 +171,6 @@ class Hologram:
             image_encoder=img_enc,
             field=field,
         )
+    def init_memory(self, save_path="data/smi_state.json"):
+        self.smi = SymbolicMemoryInterface(self.store, self.glyphs, save_path=save_path)
+        return self.smi
