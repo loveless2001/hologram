@@ -27,38 +27,50 @@ class Glyph:
 
 
 # --- Lightweight vector index ---
-class SimpleIndex:
-    """A minimal cosine similarity index. (Replace with FAISS later.)"""
-    def __init__(self, dim: int):
+import faiss
+
+class VectorIndex:
+    def __init__(self, dim: int, use_gpu: bool = True):
         self.dim = dim
-        self.vectors: Dict[str, np.ndarray] = {}
+        self.use_gpu = use_gpu and faiss.get_num_gpus() > 0
 
-    def upsert(self, id: str, vec: np.ndarray):
-        vec = vec.astype("float32")
-        vec /= (np.linalg.norm(vec) + 1e-8)
-        self.vectors[id] = vec
+        # CPU index first
+        self.index = faiss.IndexFlatIP(dim)
 
-    def search(self, query: np.ndarray, top_k: int = 5) -> List[Tuple[str, float]]:
-        if not self.vectors:
+        # Move to GPU if possible
+        if self.use_gpu:
+            print(f"[FAISS] Using GPU backend ({faiss.get_num_gpus()} GPUs available)")
+            res = faiss.StandardGpuResources()
+            self.index = faiss.index_cpu_to_gpu(res, 0, self.index)
+        else:
+            print("[FAISS] Using CPU backend")
+
+        self.id_to_key = []
+
+    def upsert(self, key: str, vec: np.ndarray):
+        vec = vec.astype('float32').reshape(1, -1)
+        self.index.add(vec)
+        self.id_to_key.append(key)
+
+    def search(self, query: np.ndarray, top_k: int = 5):
+        if self.index.ntotal == 0:
             return []
-        ids = list(self.vectors.keys())
-        mat = np.stack([self.vectors[i] for i in ids], axis=0)
-        q = query / (np.linalg.norm(query) + 1e-8)
-        matn = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-8)
-        sims = (matn @ q).astype("float32")
-        top_idx = sims.argsort()[-top_k:][::-1]
-        return [(ids[i], float(sims[i])) for i in top_idx]
-
+        query = query.astype('float32').reshape(1, -1)
+        D, I = self.index.search(query, top_k)
+        results = []
+        for score, idx in zip(D[0], I[0]):
+            if idx < len(self.id_to_key):
+                results.append((self.id_to_key[idx], float(score)))
+        return results
 
 # --- Core store ---
 class MemoryStore:
     """Persistent memory + glyph registry + gravity integration."""
-    def __init__(self, vec_dim: int = 512):
+    def __init__(self, vec_dim: int):
         self.vec_dim = vec_dim
-        self.traces: Dict[str, Trace] = {}
-        self.glyphs: Dict[str, Glyph] = {}
-        self.index = SimpleIndex(vec_dim)
-        self.sim = Gravity(dim=vec_dim)   # integrate gravity field
+        self.traces = {}
+        self.glyphs = {}
+        self.index = VectorIndex(vec_dim, use_gpu=True)
 
     # --- Trace operations ---
     def add_trace(self, t: Trace):
