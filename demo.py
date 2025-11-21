@@ -2,7 +2,7 @@
 from hologram.api import Hologram
 
 def main():
-    hg = Hologram.init()
+    hg = Hologram.init(use_clip=False)
 
     # Create a few glyph anchors
     hg.glyphs.create('🝞', title='Curvature Anchor', notes='Meta‑recurrence anchor')

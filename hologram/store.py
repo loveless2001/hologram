@@ -71,6 +71,7 @@ class MemoryStore:
         self.traces = {}
         self.glyphs = {}
         self.index = VectorIndex(vec_dim, use_gpu=True)
+        self.sim = Gravity(dim=vec_dim)
 
     # --- Trace operations ---
     def add_trace(self, t: Trace):
@@ -122,6 +123,7 @@ class MemoryStore:
         path_obj.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "vec_dim": self.vec_dim,
+            "gravity_state": self.sim.get_state(),  # Save gravity state
             "traces": [
                 {
                     "trace_id": t.trace_id,
@@ -154,6 +156,12 @@ class MemoryStore:
         vec_dim = int(data.get("vec_dim"))
         store = cls(vec_dim=vec_dim)
 
+        # Restore gravity state if available
+        gravity_state = data.get("gravity_state")
+        if gravity_state:
+            store.sim.set_state(gravity_state)
+            print(f"[MemoryStore] Restored gravity field state ({len(store.sim.concepts)} concepts)")
+
         for t_data in data.get("traces", []):
             vec = np.array(t_data["vec"], dtype=np.float32)
             trace = Trace(
@@ -163,7 +171,16 @@ class MemoryStore:
                 vec=vec,
                 meta=t_data.get("meta", {}),
             )
-            store.add_trace(trace)
+            # Add to store and index, but conditionally skip gravity update
+            store.traces[trace.trace_id] = trace
+            store.index.upsert(trace.trace_id, trace.vec)
+            
+            # Only add to sim if we didn't restore state (legacy replay mode)
+            # OR if this specific trace isn't in the restored concepts (partial update?)
+            # For simplicity: if gravity_state was loaded, we assume it covers the traces.
+            # But to be safe against partial saves, we can check:
+            if not gravity_state or trace.trace_id not in store.sim.concepts:
+                store.sim.add_concept(trace.trace_id, vec=trace.vec)
 
         for g_data in data.get("glyphs", []):
             glyph = Glyph(

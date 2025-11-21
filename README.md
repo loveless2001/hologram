@@ -8,7 +8,7 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 - Glyph anchors (`🝞`, `🜂`, `memory:gravity`, …) collect related traces across sessions.
 - Dual encoder stack: hashing fallback works everywhere; OpenCLIP adds semantic text ↔ image retrieval.
 - Gravity field powered by FAISS to visualise resonance and decay between stored concepts.
-- JSON-backed memory store with glyph registry, summarisation helpers, and optional persistence.
+- JSON-backed memory store with glyph registry, summarisation helpers, and **optimized state persistence** (saves final vector state to avoid costly replay).
 - Chat orchestration (`chat_cli.py`) with session logs plus a tiny FastAPI surface for programmatic access.
 
 ---
@@ -16,7 +16,7 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 ## Components
 - `hologram/api.py` – public `Hologram` API (`add_text`, `add_image_path`, search, persistence).
 - `hologram/chatbot.py` – chat memory, provider abstractions, CLI orchestration helpers.
-- `hologram/gravity.py` – concept drift simulation and FAISS-backed `GravityField`.
+- `hologram/gravity.py` – concept drift simulation and FAISS-backed `GravityField` (supports state export/import).
 - `hologram/embeddings.py` – hashing encoders and CLIP wrappers (text and image).
 - `chat_cli.py` – command-line chat demo that keeps cross-session context.
 - `api_server/main.py` – FastAPI service exposing `/add_text` + `/search` endpoints.
@@ -28,7 +28,7 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 ## Installation
 
 ```bash
-git clone https://github.com/<your-username>/hologram.git
+git clone https://github.com/loveless2001/hologram.git
 cd hologram
 python3 -m venv .venv
 source .venv/bin/activate
@@ -74,6 +74,7 @@ holo.save("memory_store.json")
 ```
 
 Reload later with `Hologram.load("memory_store.json", use_clip=False)`.
+(This restores the gravity field state instantly without replaying history.)
 
 ---
 

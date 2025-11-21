@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Any
 import hashlib
 import numpy as np
 from .config import VECTOR_DIM, SEED
@@ -75,8 +75,8 @@ class ImageCLIP:
     """
     def __init__(
         self,
-        model: Optional[torch.nn.Module] = None,
-        preprocess: Optional[torch.nn.Module] = None,
+        model: Optional[Any] = None,
+        preprocess: Optional[Any] = None,
         model_name: str = "ViT-B-32",
         pretrained: str = "laion2b_s34b_b79k",
         device: Optional[str] = None,
@@ -118,7 +118,7 @@ class TextCLIP:
     """
     Text encoder using the SAME OpenCLIP model as ImageCLIP.
     """
-    def __init__(self, model: torch.nn.Module, device: Optional[str] = None):
+    def __init__(self, model: Any, device: Optional[str] = None):
         if torch is None:
             raise RuntimeError(
                 "torch is required for CLIP-based text encoding. Install torch or "
@@ -143,7 +143,7 @@ class TextCLIP:
 
 
 # Utility: get embedding dim from a CLIP model (works across variants)
-def get_clip_embed_dim(model: torch.nn.Module) -> int:
+def get_clip_embed_dim(model: Any) -> int:
     if hasattr(model, "text_projection") and model.text_projection is not None:
         return int(model.text_projection.shape[-1])
     if hasattr(model, "visual") and hasattr(model.visual, "output_dim"):

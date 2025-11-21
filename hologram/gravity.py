@@ -115,6 +115,57 @@ class Gravity:
         names = list(self.concepts.keys())
         return proj, names
 
+    def get_state(self) -> dict:
+        """Export current simulation state (concepts and relations)."""
+        return {
+            "concepts": {
+                name: {
+                    "vec": c.vec.tolist(),
+                    "mass": c.mass,
+                    "count": c.count
+                }
+                for name, c in self.concepts.items()
+            },
+            "relations": {
+                f"{k[0]}|{k[1]}": v
+                for k, v in self.relations.items()
+            },
+            "params": {
+                "dim": self.dim,
+                "eta": self.eta,
+                "alpha_neg": self.alpha_neg,
+                "gamma_decay": self.gamma_decay,
+                "seed": self.seed
+            }
+        }
+
+    def set_state(self, state: dict):
+        """Restore simulation state from dictionary."""
+        # Restore params
+        params = state.get("params", {})
+        self.dim = params.get("dim", self.dim)
+        self.eta = params.get("eta", self.eta)
+        self.alpha_neg = params.get("alpha_neg", self.alpha_neg)
+        self.gamma_decay = params.get("gamma_decay", self.gamma_decay)
+        self.seed = params.get("seed", self.seed)
+
+        # Restore concepts
+        self.concepts = {}
+        for name, data in state.get("concepts", {}).items():
+            self.concepts[name] = Concept(
+                name=name,
+                vec=np.array(data["vec"], dtype=np.float32),
+                mass=data["mass"],
+                count=data["count"]
+            )
+
+        # Restore relations
+        self.relations = {}
+        for k_str, v in state.get("relations", {}).items():
+            parts = k_str.split("|")
+            if len(parts) == 2:
+                self.relations[(parts[0], parts[1])] = v
+
 
 # --- Field wrapper (FAISS + Gravity) ---
 class GravityField:
