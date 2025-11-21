@@ -7,7 +7,8 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 ## Highlights
 - Glyph anchors (`🝞`, `🜂`, `memory:gravity`, …) collect related traces across sessions.
 - Dual encoder stack: hashing fallback works everywhere; OpenCLIP adds semantic text ↔ image retrieval.
-- Gravity field powered by FAISS to visualise resonance and decay between stored concepts.
+- **Negation-aware** gravity field powered by FAISS: positive statements attract concepts, negative statements repel them.
+- **Reinforcement-based decay**: unreinforced concepts drift to memory periphery and lose influence over time.
 - JSON-backed memory store with glyph registry, summarisation helpers, and **optimized state persistence** (saves final vector state to avoid costly replay).
 - Chat orchestration (`chat_cli.py`) with session logs plus a tiny FastAPI surface for programmatic access.
 
@@ -80,6 +81,8 @@ Reload later with `Hologram.load("memory_store.json", use_clip=False)`.
 
 ## Demos
 - Text only: `python demo.py`
+- Negation-aware gravity: `python demo_negation.py`
+- Reinforcement-based decay: `python demo_decay.py`
 - Text → image: `python demo_clip.py`
 - Image → image: `python demo_img2img.py`
 

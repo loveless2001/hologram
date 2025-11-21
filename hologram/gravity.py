@@ -34,7 +34,22 @@ def pca2(X: np.ndarray):
 
 
 # --- Constants ---
-STOPWORDS = set("a an the of to in for on at by and or if is are was were be been being as from with without than not no".split())
+STOPWORDS = set("a an the of to in for on at by and or if is are was were be been being as from with without than".split())
+NEGATION_WORDS = set(["not", "no", "never", "n't", "isnt", "isn't", "arent", "aren't", "wasnt", "wasn't", "werent", "weren't", "doesnt", "doesn't", "didnt", "didn't", "wont", "won't", "wouldnt", "wouldn't", "cant", "can't", "couldnt", "couldn't", "shouldnt", "shouldn't"])
+
+def detect_negation(text: str) -> bool:
+    """Detect if text contains negation markers."""
+    if not text:
+        return False
+    text_lower = text.lower()
+    
+    # Check for common negation patterns in the original text
+    if any(word in text_lower for word in ["n't", "not ", " no ", "never "]):
+        return True
+    
+    # Also check tokenized version
+    tokens = text_lower.replace("'", "").replace("'", "").split()
+    return any(tok in NEGATION_WORDS for tok in tokens)
 
 
 # --- Core simulation (Memory Gravity) ---
@@ -44,6 +59,8 @@ class Concept:
     vec: np.ndarray
     mass: float = 1.0
     count: int = 1
+    negation: bool = False  # True if concept contains negation
+    last_reinforced: int = 0  # Global step when last reinforced
 
 
 @dataclass
@@ -53,9 +70,12 @@ class Gravity:
     alpha_neg: float = 0.2
     gamma_decay: float = 0.98
     seed: int = 13
+    isolation_drift: float = 0.01  # Drift rate for unreinforced concepts
+    mass_decay: float = 0.95  # Mass decay for unreinforced concepts
 
     concepts: Dict[str, Concept] = field(default_factory=dict)
     relations: Dict[Tuple[str, str], float] = field(default_factory=dict)
+    global_step: int = 0  # Increments with each concept addition
 
     def encode(self, text: str) -> np.ndarray:
         toks = text.lower().split()
@@ -81,28 +101,85 @@ class Gravity:
             dist = np.linalg.norm(direction) + 1e-8
             direction /= dist
             step = self.eta * sim
-            other.vec += step * direction
-            new.vec -= step * direction
+            
+            # NEGATION HANDLING: Reverse pull if new concept has negation
+            # This makes negated concepts repel instead of attract
+            polarity = -1.0 if new.negation else 1.0
+            
+            other.vec += polarity * step * direction
+            new.vec -= polarity * step * direction
             other.vec /= (np.linalg.norm(other.vec) + 1e-8)
             new.vec /= (np.linalg.norm(new.vec) + 1e-8)
             key = (min(name, new_name), max(name, new_name))
             old = self.relations.get(key, 0.0) * self.gamma_decay
-            self.relations[key] = (old + sim) / 2.0
+            self.relations[key] = (old + polarity * sim) / 2.0
 
-    def add_concept(self, name: str, text: Optional[str] = None, vec: Optional[np.ndarray] = None, mass: float = 1.0):
+    def add_concept(self, name: str, text: Optional[str] = None, vec: Optional[np.ndarray] = None, mass: float = 1.0, negation: Optional[bool] = None):
+        self.global_step += 1
+        
         if name in self.concepts:
+            # Reinforcement: restore mass and update timestamp
             c = self.concepts[name]
             c.count += 1
-            c.mass += mass
+            c.mass = min(c.mass + mass, mass * 2.0)  # Cap at 2x base mass
+            c.last_reinforced = self.global_step
             return
+        
         vec = vec if vec is not None else self.encode(text or name)
-        self.concepts[name] = Concept(name=name, vec=vec, mass=mass, count=1)
+        
+        # Auto-detect negation if not explicitly provided
+        if negation is None and text:
+            negation = detect_negation(text)
+        elif negation is None:
+            negation = False
+            
+        self.concepts[name] = Concept(
+            name=name, 
+            vec=vec, 
+            mass=mass, 
+            count=1, 
+            negation=negation,
+            last_reinforced=self.global_step
+        )
         self._mutual_drift(name)
 
+    def apply_isolation_decay(self, staleness_threshold: int = 5):
+        """Apply decay to unreinforced concepts.
+        
+        Concepts that haven't been reinforced recently:
+        - Drift away from the centroid (isolation)
+        - Lose mass (influence)
+        """
+        if len(self.concepts) < 2:
+            return
+        
+        # Calculate centroid of all concepts
+        centroid = np.mean([c.vec for c in self.concepts.values()], axis=0)
+        
+        for name, concept in self.concepts.items():
+            staleness = self.global_step - concept.last_reinforced
+            
+            if staleness > staleness_threshold:
+                # Push away from centroid (isolation drift)
+                to_centroid = centroid - concept.vec
+                drift_strength = self.isolation_drift * min(staleness / 10.0, 1.0)
+                
+                # Move AWAY from centroid
+                concept.vec -= drift_strength * to_centroid
+                concept.vec /= (np.linalg.norm(concept.vec) + 1e-8)
+                
+                # Decay mass
+                concept.mass *= self.mass_decay
+    
     def step_decay(self, steps: int = 1):
+        """Decay relations and apply isolation drift."""
         for _ in range(steps):
+            # Decay relation strengths
             for k in list(self.relations.keys()):
                 self.relations[k] *= self.gamma_decay
+            
+            # Apply isolation-based drift
+            self.apply_isolation_decay()
 
     def get_matrix(self) -> np.ndarray:
         if not self.concepts:
@@ -122,7 +199,9 @@ class Gravity:
                 name: {
                     "vec": c.vec.tolist(),
                     "mass": c.mass,
-                    "count": c.count
+                    "count": c.count,
+                    "negation": c.negation,
+                    "last_reinforced": c.last_reinforced
                 }
                 for name, c in self.concepts.items()
             },
@@ -135,7 +214,10 @@ class Gravity:
                 "eta": self.eta,
                 "alpha_neg": self.alpha_neg,
                 "gamma_decay": self.gamma_decay,
-                "seed": self.seed
+                "seed": self.seed,
+                "isolation_drift": self.isolation_drift,
+                "mass_decay": self.mass_decay,
+                "global_step": self.global_step
             }
         }
 
@@ -148,6 +230,9 @@ class Gravity:
         self.alpha_neg = params.get("alpha_neg", self.alpha_neg)
         self.gamma_decay = params.get("gamma_decay", self.gamma_decay)
         self.seed = params.get("seed", self.seed)
+        self.isolation_drift = params.get("isolation_drift", self.isolation_drift)
+        self.mass_decay = params.get("mass_decay", self.mass_decay)
+        self.global_step = params.get("global_step", 0)
 
         # Restore concepts
         self.concepts = {}
@@ -156,7 +241,9 @@ class Gravity:
                 name=name,
                 vec=np.array(data["vec"], dtype=np.float32),
                 mass=data["mass"],
-                count=data["count"]
+                count=data["count"],
+                negation=data.get("negation", False),
+                last_reinforced=data.get("last_reinforced", 0)
             )
 
         # Restore relations

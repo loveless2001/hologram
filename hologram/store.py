@@ -77,7 +77,9 @@ class MemoryStore:
     def add_trace(self, t: Trace):
         self.traces[t.trace_id] = t
         self.index.upsert(t.trace_id, t.vec)
-        self.sim.add_concept(t.trace_id, vec=t.vec)
+        # Pass text content to gravity sim for negation detection
+        text_for_negation = t.content if t.kind == "text" else None
+        self.sim.add_concept(t.trace_id, text=text_for_negation, vec=t.vec)
 
     def get_trace(self, trace_id: str) -> Optional[Trace]:
         return self.traces.get(trace_id)
