@@ -62,12 +62,7 @@ pip install torch torchvision open_clip_torch
 
 If FAISS wheels are not available on your platform, initialise with `Hologram.init(use_gravity=False)`.
 
-### Optional extras
-- CLIP stack (semantic text ↔ image):  
-  `pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu`  
-  `pip install pillow open_clip_torch`
-- Chat providers: `pip install openai`
-- REST API: `pip install fastapi uvicorn[standard]`
+
 - Development helpers: `pip install pytest`
 
 *(Switch to CUDA wheels if you have a GPU.)*
