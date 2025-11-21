@@ -40,7 +40,24 @@ source .venv/bin/activate
 `GravityField` imports FAISS; install it even when using the hashing encoders:
 
 ```bash
-pip install numpy faiss-cpu
+pip install numpy faiss-cpu Pillow
+```
+
+### Optional dependencies
+
+For the API server:
+```bash
+pip install fastapi uvicorn
+```
+
+For the Chatbot (OpenAI provider):
+```bash
+pip install openai
+```
+
+For CLIP embeddings (semantic image search):
+```bash
+pip install torch torchvision open_clip_torch
 ```
 
 If FAISS wheels are not available on your platform, initialise with `Hologram.init(use_gravity=False)`.
