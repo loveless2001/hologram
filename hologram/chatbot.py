@@ -22,6 +22,8 @@ from typing import Dict, List, Optional, Protocol
 
 from .api import Hologram
 from .store import Trace
+from .api import Hologram
+from .store import Trace
 
 
 # ---------------------------------------------------------------------------
@@ -146,11 +148,19 @@ class ChatMemory:
         ts = timestamp if timestamp is not None else time.time()
         meta = {"role": role, "session_id": session_id, "timestamp": ts}
 
-        vec = self.hologram.text_encoder.encode(content)
-        trace = Trace(trace_id=trace_id, kind="chat", content=content, vec=vec, meta=meta)
-        self.hologram.glyphs.attach_trace(self.session_glyph(session_id), trace)
-        # Link the same trace to the global glyph for cross-session comparisons.
-        self.hologram.store.link_trace(self.global_glyph, trace_id)
+        # DECOMPOSITION: Extract concepts and add them to the gravity field
+        # This allows individual ideas to drift and interact based on the quantization level
+        # Now handled by Hologram.add_text with extract_concepts=True
+        self.hologram.add_text(
+            glyph_id=self.session_glyph(session_id),
+            text=content,
+            trace_id=trace_id,
+            do_extract_concepts=True,
+            role=role,
+            session_id=session_id,
+            timestamp=ts
+        )
+        
         return trace_id
 
     def get_recent_session_messages(self, session_id: str) -> List[Dict[str, str]]:
@@ -199,6 +209,48 @@ class ChatMemory:
             role = hit.get("role", "assistant")
             lines.append(f"- ({session_lbl}, {role}) {hit.get('content', '')}")
         return "\n".join(lines)
+
+    def get_concept_graph(self, concepts: List[str]) -> List[Dict]:
+        """
+        Retrieve a subgraph of concepts with their relations and mass.
+        Delegates to GravityField.
+        """
+        if not self.hologram.field:
+            return [{"name": c, "mass": 1.0, "related_to": []} for c in concepts]
+            
+        return self.hologram.field.get_subgraph(concepts)
+
+    def reconstruct(self, query: str, provider: ChatProvider) -> str:
+        """
+        Reconstruct a coherent answer from memory shards using the provider.
+        """
+        # 1. Retrieve shards (concepts)
+        qv = self.hologram.text_encoder.encode(query)
+        if self.hologram.field:
+            hits = self.hologram.field.search(qv, k=10)
+            shards = [name for name, score in hits]
+        else:
+            # Fallback to searching traces if no field
+            hits = self.hologram.search_text(query, top_k=10)
+            shards = [h[0].content for h in hits] # Rough approximation
+            
+        if not shards:
+            return "No relevant memories found to reconstruct an answer."
+            
+        # 2. Build graph representation
+        graph_data = self.get_concept_graph(shards)
+        
+        # 3. Construct prompt
+        prompt = f"""
+I have retrieved the following concept graph from my holographic memory:
+{json.dumps(graph_data, indent=2)}
+
+Based ONLY on this graph, reconstruct a coherent explanation answering the query: "{query}".
+The graph shows concepts, their 'mass' (importance), and 'related_to' connections (strength).
+Synthesize these relationships into a clear narrative.
+"""
+        messages = [{"role": "user", "content": prompt}]
+        return provider.generate(messages)
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +319,11 @@ class ChatWindow:
             print("\nSession interrupted.")
 
 
-def resolve_provider(api_key: Optional[str] = None, model: str = "gpt-3.5-turbo") -> ChatProvider:
+def resolve_provider(api_key: Optional[str] = None, model: str = "gpt-5") -> ChatProvider:
+    # Load .env file
+    from dotenv import load_dotenv
+    load_dotenv()
+    
     key = api_key or os.getenv("OPENAI_API_KEY")
     if key:
         try:

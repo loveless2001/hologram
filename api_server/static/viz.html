@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Hologram Concept Map</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            background: #111;
+            color: #eee;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        #viz {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 5px 10px;
+            border-radius: 4px;
+            pointer-events: none;
+            font-size: 12px;
+            border: 1px solid #444;
+        }
+
+        circle {
+            stroke: #fff;
+            stroke-width: 1px;
+            cursor: pointer;
+            transition: r 0.2s;
+        }
+
+        circle:hover {
+            r: 8px;
+            stroke: #0ff;
+        }
+
+        text {
+            font-size: 10px;
+            fill: #aaa;
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="viz"></div>
+    <div id="tooltip" class="tooltip" style="opacity: 0;"></div>
+
+    <script>
+        async function draw() {
+            const response = await fetch('/viz-data');
+            const data = await response.json();
+
+            if (data.points.length === 0) {
+                document.getElementById('viz').innerHTML = '<div style="padding:20px">No concepts found.</div>';
+                return;
+            }
+
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            const svg = d3.select("#viz").append("svg")
+                .attr("width", width)
+                .attr("height", height)
+                .call(d3.zoom().on("zoom", (event) => {
+                    g.attr("transform", event.transform);
+                }))
+                .append("g");
+
+            const g = svg.append("g");
+
+            // Scales
+            const xExtent = d3.extent(data.points, d => d[0]);
+            const yExtent = d3.extent(data.points, d => d[1]);
+
+            // Add padding to extent
+            const xPad = (xExtent[1] - xExtent[0]) * 0.1 || 1;
+            const yPad = (yExtent[1] - yExtent[0]) * 0.1 || 1;
+
+            const xScale = d3.scaleLinear()
+                .domain([xExtent[0] - xPad, xExtent[1] + xPad])
+                .range([50, width - 50]);
+
+            const yScale = d3.scaleLinear()
+                .domain([yExtent[0] - yPad, yExtent[1] + yPad])
+                .range([height - 50, 50]); // Flip Y for SVG
+
+            // Tooltip
+            const tooltip = d3.select("#tooltip");
+
+            // Draw points
+            g.selectAll("circle")
+                .data(data.points)
+                .enter()
+                .append("circle")
+                .attr("cx", d => xScale(d[0]))
+                .attr("cy", d => yScale(d[1]))
+                .attr("r", 5)
+                .attr("fill", (d, i) => d3.interpolateRainbow(i / data.points.length))
+                .on("mouseover", (event, d) => {
+                    const i = data.points.indexOf(d);
+                    tooltip.transition().duration(200).style("opacity", .9);
+                    tooltip.html(data.labels[i])
+                        .style("left", (event.pageX + 10) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => {
+                    tooltip.transition().duration(500).style("opacity", 0);
+                });
+
+            // Draw labels
+            g.selectAll("text")
+                .data(data.points)
+                .enter()
+                .append("text")
+                .attr("x", d => xScale(d[0]) + 8)
+                .attr("y", d => yScale(d[1]) + 3)
+                .text((d, i) => data.labels[i]);
+        }
+
+        draw();
+
+        // Refresh every 5 seconds
+        setInterval(() => {
+            d3.select("svg").remove();
+            draw();
+        }, 5000);
+    </script>
+</body>
+
+</html>

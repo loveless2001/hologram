@@ -1,9 +1,16 @@
 # hologram/gravity.py
 import numpy as np
 import hashlib
+import threading
 import faiss
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional
+import os
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 # --- Utility functions ---
 def hash_embed(text: str, dim: int = 256, seed: int = 13) -> np.ndarray:
@@ -52,6 +59,48 @@ def detect_negation(text: str) -> bool:
     return any(tok in NEGATION_WORDS for tok in tokens)
 
 
+def calibrate_quantization() -> float:
+    """
+    Calibrate quantization level based on hardware specs.
+    Lower level = more propagation (better hardware).
+    Higher level = less propagation (weaker hardware).
+    """
+    # Base level (conservative)
+    q_level = 0.05
+    
+    # 1. GPU Check (FAISS)
+    try:
+        num_gpus = faiss.get_num_gpus()
+        if num_gpus > 0:
+            q_level -= 0.02  # Significant boost for GPU
+    except Exception:
+        pass
+
+    # 2. CPU Check
+    try:
+        cpu_count = os.cpu_count() or 1
+        if cpu_count >= 8:
+            q_level -= 0.01
+        elif cpu_count <= 2:
+            q_level += 0.02
+    except Exception:
+        pass
+
+    # 3. RAM Check (if psutil available)
+    if psutil:
+        try:
+            mem = psutil.virtual_memory()
+            total_gb = mem.total / (1024 ** 3)
+            if total_gb >= 16:
+                q_level -= 0.01
+            elif total_gb <= 4:
+                q_level += 0.02
+        except Exception:
+            pass
+
+    return max(0.001, min(q_level, 0.2))  # Clamp between 0.001 and 0.2
+
+
 # --- Core simulation (Memory Gravity) ---
 @dataclass
 class Concept:
@@ -72,10 +121,16 @@ class Gravity:
     seed: int = 13
     isolation_drift: float = 0.01  # Drift rate for unreinforced concepts
     mass_decay: float = 0.95  # Mass decay for unreinforced concepts
+    quantization_level: Optional[float] = None  # Minimum action threshold (Planck constant)
 
     concepts: Dict[str, Concept] = field(default_factory=dict)
     relations: Dict[Tuple[str, str], float] = field(default_factory=dict)
     global_step: int = 0  # Increments with each concept addition
+
+    def __post_init__(self):
+        self._lock = threading.RLock()  # Thread safety for all mutations
+        if self.quantization_level is None:
+            self.quantization_level = calibrate_quantization()
 
     def encode(self, text: str) -> np.ndarray:
         toks = text.lower().split()
@@ -102,6 +157,12 @@ class Gravity:
             direction /= dist
             step = self.eta * sim
             
+            # QUANTIZATION: Check if the interaction is strong enough to propagate
+            # This acts like a Planck constant for the gravity field
+            if abs(step) < self.quantization_level:
+                continue
+            
+            
             # NEGATION HANDLING: Reverse pull if new concept has negation
             # This makes negated concepts repel instead of attract
             polarity = -1.0 if new.negation else 1.0
@@ -114,34 +175,138 @@ class Gravity:
             old = self.relations.get(key, 0.0) * self.gamma_decay
             self.relations[key] = (old + polarity * sim) / 2.0
 
-    def add_concept(self, name: str, text: Optional[str] = None, vec: Optional[np.ndarray] = None, mass: float = 1.0, negation: Optional[bool] = None):
-        self.global_step += 1
-        
-        if name in self.concepts:
-            # Reinforcement: restore mass and update timestamp
-            c = self.concepts[name]
-            c.count += 1
-            c.mass = min(c.mass + mass, mass * 2.0)  # Cap at 2x base mass
-            c.last_reinforced = self.global_step
-            return
-        
-        vec = vec if vec is not None else self.encode(text or name)
-        
-        # Auto-detect negation if not explicitly provided
-        if negation is None and text:
-            negation = detect_negation(text)
-        elif negation is None:
-            negation = False
+    def check_mitosis(self, name: str, threshold: float = 0.5) -> bool:
+        """
+        Check if a concept is under semantic tension and needs splitting.
+        Returns True if mitosis occurred.
+        """
+        with self._lock:
+            if name not in self.concepts:
+                return False
+                
+            # 1. Gather neighbors
+            neighbors = []
+            for other_name in self.concepts:
+                if other_name == name: continue
+                key = (min(name, other_name), max(name, other_name))
+                if self.relations.get(key, 0.0) > 0.3: # Strong connection threshold
+                    neighbors.append(other_name)
             
-        self.concepts[name] = Concept(
-            name=name, 
-            vec=vec, 
-            mass=mass, 
-            count=1, 
-            negation=negation,
-            last_reinforced=self.global_step
-        )
-        self._mutual_drift(name)
+            if len(neighbors) < 3:
+                return False
+                
+            # 2. Cluster neighbors (Simple 2-Means)
+            # We pick two furthest neighbors as seeds
+            max_dist = -1.0
+            seed1, seed2 = None, None
+            
+            # Find furthest pair among neighbors
+            # Optimization: Just check a few pairs or use PCA? 
+            # Let's do a quick scan
+            vecs = [self.concepts[n].vec for n in neighbors]
+            
+            # Simple heuristic: Project to 1D via PCA and split by median?
+            # Or just pick random seeds? Let's try furthest pair.
+            for i in range(len(neighbors)):
+                for j in range(i+1, len(neighbors)):
+                    d = 1.0 - cosine(vecs[i], vecs[j]) # Cosine distance
+                    if d > max_dist:
+                        max_dist = d
+                        seed1, seed2 = i, j
+            
+            if max_dist < threshold: # Neighbors are too close, no split needed
+                return False
+                
+            # Assign neighbors to clusters
+            cluster1 = []
+            cluster2 = []
+            c1_vec = vecs[seed1]
+            c2_vec = vecs[seed2]
+            
+            for i, n in enumerate(neighbors):
+                d1 = 1.0 - cosine(vecs[i], c1_vec)
+                d2 = 1.0 - cosine(vecs[i], c2_vec)
+                if d1 < d2:
+                    cluster1.append(n)
+                else:
+                    cluster2.append(n)
+                    
+            if not cluster1 or not cluster2:
+                return False
+                
+            # 3. Perform Mitosis
+            print(f"[Mitosis] Splitting '{name}' into '{name}_1' and '{name}_2'")
+            original = self.concepts[name]
+            
+            # Create siblings
+            name1 = f"{name}_1"
+            name2 = f"{name}_2"
+            
+            # Vectors: nudge towards their clusters
+            vec1 = original.vec + 0.1 * c1_vec
+            vec1 /= np.linalg.norm(vec1)
+            
+            vec2 = original.vec + 0.1 * c2_vec
+            vec2 /= np.linalg.norm(vec2)
+            
+            self.add_concept(name1, vec=vec1, mass=original.mass/2, negation=original.negation)
+            self.add_concept(name2, vec=vec2, mass=original.mass/2, negation=original.negation)
+            
+            # Re-link neighbors
+            for n in cluster1:
+                old_key = (min(name, n), max(name, n))
+                strength = self.relations.get(old_key, 0.0)
+                new_key = (min(name1, n), max(name1, n))
+                self.relations[new_key] = strength
+                
+            for n in cluster2:
+                old_key = (min(name, n), max(name, n))
+                strength = self.relations.get(old_key, 0.0)
+                new_key = (min(name2, n), max(name2, n))
+                self.relations[new_key] = strength
+                
+            # Bridge Link (Soft Split)
+            bridge_key = (min(name1, name2), max(name1, name2))
+            self.relations[bridge_key] = 0.15 # Weak bridge
+            
+            # Cleanup original
+            del self.concepts[name]
+            # Clean relations involving original
+            keys_to_del = [k for k in self.relations if name in k]
+            for k in keys_to_del:
+                del self.relations[k]
+                
+            return True
+
+    def add_concept(self, name: str, text: Optional[str] = None, vec: Optional[np.ndarray] = None, mass: float = 1.0, negation: Optional[bool] = None):
+        with self._lock:
+            self.global_step += 1
+            
+            if name in self.concepts:
+                # Reinforcement: restore mass and update timestamp
+                c = self.concepts[name]
+                c.count += 1
+                c.mass = min(c.mass + mass, mass * 2.0)  # Cap at 2x base mass
+                c.last_reinforced = self.global_step
+                return
+            
+            vec = vec if vec is not None else self.encode(text or name)
+            
+            # Auto-detect negation if not explicitly provided
+            if negation is None and text:
+                negation = detect_negation(text)
+            elif negation is None:
+                negation = False
+                
+            self.concepts[name] = Concept(
+                name=name, 
+                vec=vec, 
+                mass=mass, 
+                count=1, 
+                negation=negation,
+                last_reinforced=self.global_step
+            )
+            self._mutual_drift(name)
 
     def apply_isolation_decay(self, staleness_threshold: int = 5):
         """Apply decay to unreinforced concepts.
@@ -173,13 +338,14 @@ class Gravity:
     
     def step_decay(self, steps: int = 1):
         """Decay relations and apply isolation drift."""
-        for _ in range(steps):
-            # Decay relation strengths
-            for k in list(self.relations.keys()):
-                self.relations[k] *= self.gamma_decay
-            
-            # Apply isolation-based drift
-            self.apply_isolation_decay()
+        with self._lock:
+            for _ in range(steps):
+                # Decay relation strengths
+                for k in list(self.relations.keys()):
+                    self.relations[k] *= self.gamma_decay
+                
+                # Apply isolation-based drift
+                self.apply_isolation_decay()
 
     def get_matrix(self) -> np.ndarray:
         if not self.concepts:
@@ -217,41 +383,44 @@ class Gravity:
                 "seed": self.seed,
                 "isolation_drift": self.isolation_drift,
                 "mass_decay": self.mass_decay,
+                "quantization_level": self.quantization_level,
                 "global_step": self.global_step
             }
         }
 
     def set_state(self, state: dict):
         """Restore simulation state from dictionary."""
-        # Restore params
-        params = state.get("params", {})
-        self.dim = params.get("dim", self.dim)
-        self.eta = params.get("eta", self.eta)
-        self.alpha_neg = params.get("alpha_neg", self.alpha_neg)
-        self.gamma_decay = params.get("gamma_decay", self.gamma_decay)
-        self.seed = params.get("seed", self.seed)
-        self.isolation_drift = params.get("isolation_drift", self.isolation_drift)
-        self.mass_decay = params.get("mass_decay", self.mass_decay)
-        self.global_step = params.get("global_step", 0)
+        with self._lock:
+            # Restore params
+            params = state.get("params", {})
+            self.dim = params.get("dim", self.dim)
+            self.eta = params.get("eta", self.eta)
+            self.alpha_neg = params.get("alpha_neg", self.alpha_neg)
+            self.gamma_decay = params.get("gamma_decay", self.gamma_decay)
+            self.seed = params.get("seed", self.seed)
+            self.isolation_drift = params.get("isolation_drift", self.isolation_drift)
+            self.mass_decay = params.get("mass_decay", self.mass_decay)
+            self.quantization_level = params.get("quantization_level", self.quantization_level)
+            self.global_step = params.get("global_step", 0)
 
-        # Restore concepts
-        self.concepts = {}
-        for name, data in state.get("concepts", {}).items():
-            self.concepts[name] = Concept(
-                name=name,
-                vec=np.array(data["vec"], dtype=np.float32),
-                mass=data["mass"],
-                count=data["count"],
-                negation=data.get("negation", False),
-                last_reinforced=data.get("last_reinforced", 0)
-            )
+            # Restore concepts
+            self.concepts = {}
+            for name, data in state.get("concepts", {}).items():
+                self.concepts[name] = Concept(
+                    name=name,
+                    vec=np.array(data["vec"], dtype=np.float32),
+                    mass=data["mass"],
+                    count=data["count"],
+                    negation=data.get("negation", False),
+                    last_reinforced=data.get("last_reinforced", 0)
+                )
 
-        # Restore relations
-        self.relations = {}
-        for k_str, v in state.get("relations", {}).items():
-            parts = k_str.split("|")
-            if len(parts) == 2:
-                self.relations[(parts[0], parts[1])] = v
+            # Restore relations
+            self.relations = {}
+            for k_str, v in state.get("relations", {}).items():
+                parts = k_str.split("|")
+                if len(parts) == 2:
+                    self.relations[(parts[0], parts[1])] = v
 
 
 # --- Field wrapper (FAISS + Gravity) ---
@@ -289,3 +458,43 @@ class GravityField:
 
     def step_decay(self, steps: int = 1):
         self.sim.step_decay(steps)
+
+    def check_mitosis(self, name: str) -> bool:
+        """Wrapper for Gravity.check_mitosis."""
+        return self.sim.check_mitosis(name)
+
+    def get_subgraph(self, concepts: List[str]) -> List[Dict]:
+        """
+        Retrieve a subgraph of concepts with their relations and mass.
+        Returns a list of concept objects with 'related_to' fields.
+        """
+        graph = []
+        for name in concepts:
+            if name not in self.sim.concepts:
+                continue
+                
+            c = self.sim.concepts[name]
+            node = {
+                "name": name,
+                "mass": round(c.mass, 3),
+                "related_to": []
+            }
+            
+            # Find relations where this concept is involved
+            for other_name in concepts:
+                if name == other_name:
+                    continue
+                    
+                key = (min(name, other_name), max(name, other_name))
+                if key in self.sim.relations:
+                    strength = self.sim.relations[key]
+                    if strength > 0.1:  # Filter weak relations
+                        node["related_to"].append({
+                            "name": other_name,
+                            "strength": round(strength, 3)
+                        })
+            
+            node["related_to"].sort(key=lambda x: x["strength"], reverse=True)
+            graph.append(node)
+            
+        return graph

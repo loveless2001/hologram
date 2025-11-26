@@ -155,6 +155,19 @@ Your system needs:
 - Relationships emerge automatically
 - Self-organizing
 
+### 6. **Contextual Disambiguation (Mitosis)**
+Traditional KGs handle polysemy via explicit nodes (`Field_Physics`, `Field_Agri`).
+Your system handles it **dynamically**:
+- Detects when "Field" is pulled in two directions
+- **Splits** the node automatically (`Field` -> `Field_1`, `Field_2`)
+- Maintains a **bridge link** for metaphorical traversal
+
+### 7. **Graph-Based Reconstruction**
+While KGs support path traversal, your system supports **subgraph synthesis**:
+- Retrieves a weighted subgraph (nodes + mass + relations)
+- Uses LLM to "read" the graph and tell a story
+- Bridges the gap between structured data and natural language
+
 ---
 
 ## Hybrid Approach (Best of Both Worlds?)

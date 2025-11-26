@@ -1,5 +1,6 @@
 # hologram/store.py
 import json
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -33,6 +34,7 @@ class VectorIndex:
     def __init__(self, dim: int, use_gpu: bool = True):
         self.dim = dim
         self.use_gpu = use_gpu and faiss.get_num_gpus() > 0
+        self._lock = threading.RLock()  # Thread safety
 
         # CPU index first
         self.index = faiss.IndexFlatIP(dim)
@@ -48,20 +50,22 @@ class VectorIndex:
         self.id_to_key = []
 
     def upsert(self, key: str, vec: np.ndarray):
-        vec = vec.astype('float32').reshape(1, -1)
-        self.index.add(vec)
-        self.id_to_key.append(key)
+        with self._lock:
+            vec = vec.astype('float32').reshape(1, -1)
+            self.index.add(vec)
+            self.id_to_key.append(key)
 
     def search(self, query: np.ndarray, top_k: int = 5):
-        if self.index.ntotal == 0:
-            return []
-        query = query.astype('float32').reshape(1, -1)
-        D, I = self.index.search(query, top_k)
-        results = []
-        for score, idx in zip(D[0], I[0]):
-            if idx < len(self.id_to_key):
-                results.append((self.id_to_key[idx], float(score)))
-        return results
+        with self._lock:
+            if self.index.ntotal == 0:
+                return []
+            query = query.astype('float32').reshape(1, -1)
+            D, I = self.index.search(query, top_k)
+            results = []
+            for score, idx in zip(D[0], I[0]):
+                if idx < len(self.id_to_key):
+                    results.append((self.id_to_key[idx], float(score)))
+            return results
 
 # --- Core store ---
 class MemoryStore:

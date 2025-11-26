@@ -22,6 +22,7 @@ from .embeddings import (
     get_clip_embed_dim,
 )
 from .gravity import GravityField  # ← integrate Memory Gravity
+from .text_utils import extract_concepts
 
 
 @dataclass
@@ -78,13 +79,22 @@ class Hologram:
         )
 
     # --- Write operations ---
-    def add_text(self, glyph_id: str, text: str, trace_id: Optional[str] = None, **meta):
+    def add_text(self, glyph_id: str, text: str, trace_id: Optional[str] = None, do_extract_concepts: bool = False, **meta):
         trace_id = trace_id or f"text:{abs(hash(text))%10**10}"
         vec = self.text_encoder.encode(text)
         tr = Trace(trace_id=trace_id, kind="text", content=text, vec=vec, meta=meta)
         self.glyphs.attach_trace(glyph_id, tr)
         if self.field:
             self.field.add(trace_id, vec)
+            
+            if do_extract_concepts:
+                concepts = extract_concepts(text)
+                for concept_text in concepts:
+                    c_vec = self.text_encoder.encode(concept_text)
+                    self.field.add(concept_text, vec=c_vec)
+                    if self.field.check_mitosis(concept_text):
+                        print(f"[Gravity] Mitosis occurred for '{concept_text}'")
+                        
         return trace_id
 
     def add_image_path(self, glyph_id: str, path: str, trace_id: Optional[str] = None, **meta):
@@ -162,7 +172,15 @@ class Hologram:
             text_enc = TextHasher(dim=store.vec_dim)
             img_enc = ImageStub(dim=store.vec_dim)
 
-        field = GravityField(dim=store.vec_dim) if use_gravity else None
+        # Use the gravity state from the store if available, otherwise create new
+        if use_gravity and hasattr(store, 'sim') and store.sim is not None:
+            # Wrap the existing Gravity instance in a GravityField
+            field = GravityField(dim=store.vec_dim)
+            field.sim = store.sim  # Use the restored gravity state
+        elif use_gravity:
+            field = GravityField(dim=store.vec_dim)
+        else:
+            field = None
 
         return cls(
             store=store,

@@ -12,3 +12,5 @@ env/
 *.npy
 EOF
 =*
+.agent/
+.cursorrules

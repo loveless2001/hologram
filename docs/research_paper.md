@@ -40,7 +40,11 @@ Biological memory follows a "use it or lose it" principle. We model this through
 2.  **Isolation Drift**: Unreinforced concepts are subject to a drift force that pushes them away from the centroid of the knowledge cluster.
 3.  **Mass Decay**: The influence of a concept decays exponentially with staleness.
 
-This ensures that the system's "working memory" remains relevant, while outdated information naturally fades to the periphery.
+### 2.4 Contextual Disambiguation (Concept Mitosis)
+A critical challenge in semantic memory is "polysemy" – words having multiple meanings based on context (e.g., "Field" in Physics vs. Agriculture). We address this with **Concept Mitosis**:
+- **Tension Detection**: The system monitors the "semantic tension" on a concept, defined as the divergence of its neighbor clusters.
+- **Mitosis**: When tension exceeds a threshold, the concept splits into two distinct nodes (`Field_1`, `Field_2`), each inheriting a subset of relations.
+- **Bridge Links**: A weak "wormhole" connection is maintained between siblings, preserving metaphorical associations while ensuring disambiguation.
 
 ## 3. System Architecture
 
