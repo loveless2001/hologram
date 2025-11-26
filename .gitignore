@@ -14,3 +14,4 @@ EOF
 =*
 .agent/
 .cursorrules
+.env
