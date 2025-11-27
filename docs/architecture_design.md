@@ -35,7 +35,7 @@ The system is composed of three distinct but interacting layers, moving from raw
 
 - **Responsibility**:
     - Manages a collection of "Concepts" (nodes with vector + mass).
-    - Calculates gravitational forces: $F = G \frac{m_1 m_2}{r^2}$.
+    - Calculates gravitational forces, forces are computed over the cosine geometry of the manifold (e.g., similarity and distance).
     - Updates positions: Concepts drift towards similar neighbors.
     - **Mitosis**: Detects when a concept is "pulled apart" by opposing meanings (bimodal distribution of neighbors) and splits it into two distinct variants (e.g., "bank_finance" vs "bank_river").
 - **Key Component**: `GravityField` / `Gravity` (`hologram/gravity.py`)

@@ -18,10 +18,14 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 - **Visual results**: Color-coded similarity scores (🟢 80%+, 🟡 60-79%, 🔵 <60%)
 - **Adjustable results**: Query 1-20 top matches
 
+### 🚀 Phase 4: Dynamic Graph Retrieval (New!)
+- **Physics-Aware Retrieval**: Queries are no longer static lookups. They spawn a **Probe** that drifts through the gravitational field, simulating associative recall.
+- **Symbolic Memory Interface (SMI)**: Retrieves a structured **Memory Packet** (nodes, edges, glyph anchors, trajectory) instead of a flat list.
+- **Hallucination Control**: The LLM is restricted to "reading" the Memory Packet, preventing it from inventing facts not present in the field.
+
 ### 🧬 Concept Mitosis (Contextual Disambiguation)
-- **Automatic Splitting**: Detects when a concept is under "semantic tension" (pulled by opposing clusters, e.g., "Field" in Physics vs. Agriculture).
-- **Soft Mitosis**: Splits the node into `Concept_1` and `Concept_2`, reassigns neighbors, and creates a weak "bridge link" to preserve metaphorical connections.
-- **Dynamic Evolution**: The memory graph automatically refines itself as new contexts are introduced.
+- **Geometry-Based Splitting**: Uses FAISS K-means to detect bimodal distributions in concept neighbors.
+- **Soft Mitosis**: Splits ambiguous concepts (e.g., "bank") into distinct variants (financial vs. river) while maintaining weak bridge links.
 
 ### 🕸️ Graph-Based Reconstruction
 - **Structured Retrieval**: Instead of a flat list, retrieves a semantic subgraph (nodes + mass + relations).
@@ -332,21 +336,29 @@ Root scripts:
 3. **Order Preservation**: Sorts by appearance to maintain Subject→Verb→Object flow
 4. **Output**: `['Time dilation', 'occurs', 'speed of light']`
 
-### Knowledge Reconstruction
+### Knowledge Reconstruction (SMI)
 1. **Seed keyword**: User provides (e.g., "speed of light")
-2. **Vector search**: Find top-k nearest neighbors in embedding space
-3. **Graph Extraction**: Retrieve the connected subgraph (neighbors + relation strengths)
-4. **LLM Synthesis**: The LLM receives the graph JSON and reconstructs the narrative
-5. **Result**: Coherent explanation derived strictly from memory structure
+2. **Probe Simulation**: A probe drifts through the gravity field, attracted by massive concepts.
+3. **Packet Extraction**: The system captures the "local field" around the probe's trajectory.
+4. **LLM Synthesis**: The LLM receives the **Memory Packet** (SMI) and reconstructs the narrative.
 
-Example:
+Example SMI Packet:
+```json
+{
+  "seed": "speed of light",
+  "nodes": [
+    {"name": "time dilation", "mass": 1.3, "age": 12},
+    {"name": "speed of light", "mass": 1.5, "age": 4}
+  ],
+  "edges": [
+    {"a": "speed of light", "b": "time dilation", "relation": 0.82, "tension": 0.12}
+  ],
+  "glyphs": [
+    {"id": "🝞", "mass": 2.4}
+  ]
+}
 ```
-Seed: "speed of light"
-→ Retrieved Graph: 
-  - speed of light (mass: 1.2) -> related_to: [time dilation (0.8), energy (0.7)]
-  - time dilation (mass: 1.0) -> related_to: [speed of light (0.8), proper time (0.6)]
-→ LLM Output: "The speed of light is intrinsically linked to time dilation..."
-```
+LLM Output: *"The speed of light is intrinsically linked to time dilation, a relationship anchored by the curvature glyph (🝞)..."*
 
 ### Contextual Disambiguation (Mitosis)
 1. **Detection**: System monitors concepts for "semantic tension" (distinct neighbor clusters).

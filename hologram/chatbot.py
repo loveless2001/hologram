@@ -222,32 +222,25 @@ class ChatMemory:
 
     def reconstruct(self, query: str, provider: ChatProvider) -> str:
         """
-        Reconstruct a coherent answer from memory shards using the provider.
+        Reconstruct a coherent answer using the Symbolic Memory Interface (SMI).
         """
-        # 1. Retrieve shards (concepts)
-        qv = self.hologram.text_encoder.encode(query)
-        if self.hologram.field:
-            hits = self.hologram.field.search(qv, k=10)
-            shards = [name for name, score in hits]
-        else:
-            # Fallback to searching traces if no field
-            hits = self.hologram.search_text(query, top_k=10)
-            shards = [h[0].content for h in hits] # Rough approximation
-            
-        if not shards:
+        # 1. Retrieve Memory Packet (SMI)
+        packet = self.hologram.retrieve(query)
+        
+        if not packet.nodes and not packet.glyphs:
             return "No relevant memories found to reconstruct an answer."
             
-        # 2. Build graph representation
-        graph_data = self.get_concept_graph(shards)
+        # 2. Build Prompt using SMI
+        smi_block = packet.to_prompt_block()
         
-        # 3. Construct prompt
         prompt = f"""
-I have retrieved the following concept graph from my holographic memory:
-{json.dumps(graph_data, indent=2)}
+You are reading a slice of holographic memory. 
+Below is a structured semantic field extracted near the user query.
 
-Based ONLY on this graph, reconstruct a coherent explanation answering the query: "{query}".
-The graph shows concepts, their 'mass' (importance), and 'related_to' connections (strength).
-Synthesize these relationships into a clear narrative.
+{smi_block}
+
+Using ONLY the information in this memory field, reconstruct an explanation answering the query: "{query}".
+Avoid adding external facts. Missing details should be inferred from structural patterns.
 """
         messages = [{"role": "user", "content": prompt}]
         return provider.generate(messages)

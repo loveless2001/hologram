@@ -59,6 +59,11 @@ streamlit run web_ui.py
 - [x] **Bridge Links**: Preserves metaphorical connections between split concepts
 - [x] **Dynamic Graph Evolution**: Memory adapts to new domains automatically
 
+#### Phase 4: Dynamic Graph Retrieval (New!)
+- [x] **Probe Dynamics**: Physics-aware retrieval trajectory
+- [x] **SMI**: Structured Memory Packet for LLM
+- [x] **Hallucination Control**: LLM restricted to field data
+
 ---
 
 ## 🎯 Use Cases
@@ -235,5 +240,5 @@ curl -s "http://localhost:8000/viz-data" | jq '.points | length'
 
 ---
 
-**Last Updated**: 2023-11-23  
-**System Version**: Hologram v0.2 (GLiNER Integration)
+**Last Updated**: 2025-11-27  
+**System Version**: Hologram v1.0 (Phase 4: Dynamic Graph Retrieval)

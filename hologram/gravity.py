@@ -113,6 +113,59 @@ class Concept:
 
 
 @dataclass
+class Probe:
+    """A semantic probe that drifts through the Gravity Field."""
+    pos: np.ndarray
+    trajectory: List[np.ndarray] = field(default_factory=list)
+    velocity: np.ndarray = field(default_factory=lambda: np.zeros(0))  # Will be init to dim
+
+    def __post_init__(self):
+        if not self.trajectory:
+            self.trajectory.append(self.pos.copy())
+
+    def step(self, gravity: 'Gravity', step_size: float = 0.1):
+        """
+        Perform one step of drift based on gravitational pull of concepts.
+        p_{t+1} = norm(p_t + sum(sim(p_t, c_i) * m_i * unit(c_i - p_t)))
+        """
+        force = np.zeros_like(self.pos)
+        
+        # Calculate aggregate force from all concepts
+        # Optimization: In a real large-scale system, we'd use FAISS to find nearest neighbors first
+        # For now, we iterate all (or use a random subset if too large)
+        
+        # We can use matrix operations if we have gravity.get_matrix()
+        # But we need masses too.
+        
+        for name, concept in gravity.concepts.items():
+            # Direction: concept -> probe (attraction pulls probe TO concept)
+            # vector from probe to concept
+            direction = concept.vec - self.pos
+            dist = np.linalg.norm(direction) + 1e-8
+            unit_dir = direction / dist
+            
+            # Similarity (Cosine) acts as a "relevance gate"
+            # If they are orthogonal, pull is weak even if mass is high?
+            # Gravity usually depends on distance (1/r^2). 
+            # In cosine space, distance is (1-cos).
+            # Let's use the formula: Force ~ Mass * Similarity * Direction
+            
+            sim = cosine(self.pos, concept.vec)
+            
+            if sim < 0.1: continue # Ignore distant concepts
+            
+            # Pull = Mass * Sim
+            pull = concept.mass * sim
+            
+            force += pull * unit_dir
+            
+        # Update position
+        self.pos += step_size * force
+        self.pos /= (np.linalg.norm(self.pos) + 1e-8)
+        self.trajectory.append(self.pos.copy())
+
+
+@dataclass
 class Gravity:
     dim: int = 256
     eta: float = 0.05
@@ -468,6 +521,18 @@ class GravityField:
 
     def step_decay(self, steps: int = 1):
         self.sim.step_decay(steps)
+
+    def spawn_probe(self, vec: np.ndarray) -> Probe:
+        """Spawn a new probe at the given vector."""
+        vec = vec.astype("float32")
+        vec /= (np.linalg.norm(vec) + 1e-8)
+        return Probe(pos=vec, velocity=np.zeros_like(vec))
+
+    def simulate_trajectory(self, probe: Probe, steps: int = 5) -> Probe:
+        """Simulate probe drift for N steps."""
+        for _ in range(steps):
+            probe.step(self.sim)
+        return probe
 
     def check_mitosis(self, name: str) -> bool:
         """Wrapper for Gravity.check_mitosis."""

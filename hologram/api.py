@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional, List, Tuple
-from .smi import SymbolicMemoryInterface
+# from .smi import SymbolicMemoryInterface
 import numpy as np
 
 try:
@@ -24,6 +24,8 @@ from .embeddings import (
 from .gravity import GravityField  # ← integrate Memory Gravity
 from .text_utils import extract_concepts
 from .manifold import LatentManifold
+from .retrieval import extract_local_field
+from .smi import MemoryPacket
 
 
 @dataclass
@@ -129,6 +131,37 @@ class Hologram:
         qv = self.manifold.align_image(path, self.image_encoder)
         return self.glyphs.search_across(qv, top_k=top_k)
 
+    def retrieve(self, query: str) -> MemoryPacket:
+        """
+        Perform a dynamic retrieval using probe physics.
+        Returns a structured Memory Packet (SMI).
+        """
+        # 1. Encode query via Manifold
+        qv = self.manifold.align_text(query, self.text_encoder)
+        
+        # 2. Initialize Packet
+        if not self.field:
+            # Fallback if gravity is disabled
+            return MemoryPacket(seed=query, nodes=[], edges=[], glyphs=[])
+            
+        # 3. Spawn Probe & Simulate Trajectory
+        probe = self.field.spawn_probe(qv)
+        self.field.simulate_trajectory(probe, steps=5)
+        
+        # 4. Extract Local Field
+        data = extract_local_field(self.field, probe)
+        
+        # 5. Wrap in Memory Packet
+        packet = MemoryPacket(
+            seed=query,
+            nodes=data["nodes"],
+            edges=data["edges"],
+            glyphs=data["glyphs"],
+            trajectory_steps=data["trajectory_steps"]
+        )
+        
+        return packet
+
     # --- Field analytics ---
     def field_state(self):
         """Return current gravitational field projection if active."""
@@ -203,6 +236,6 @@ class Hologram:
             manifold=manifold,
             field=field,
         )
-    def init_memory(self, save_path="data/smi_state.json"):
-        self.smi = SymbolicMemoryInterface(self.store, self.glyphs, save_path=save_path)
-        return self.smi
+    # def init_memory(self, save_path="data/smi_state.json"):
+    #     self.smi = SymbolicMemoryInterface(self.store, self.glyphs, save_path=save_path)
+    #     return self.smi
