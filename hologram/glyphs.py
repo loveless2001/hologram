@@ -36,6 +36,38 @@ class GlyphRegistry:
         self.store.add_trace(trace)
         self.store.link_trace(glyph_id, trace.trace_id)
         self._cache.pop(glyph_id, None)  # invalidate cache
+        
+        # --- Glyph Physics ---
+        # 1. Recompute Centroid
+        glyph = self.store.get_glyph(glyph_id)
+        if not glyph:
+            return
+
+        vecs: List[np.ndarray] = []
+        for tid in glyph.trace_ids:
+            t = self.store.get_trace(tid)
+            if t is not None and t.vec is not None:
+                vecs.append(t.vec)
+
+        if not vecs:
+            return
+
+        mat = np.stack(vecs, axis=0).astype("float32")
+        centroid = mat.mean(axis=0)
+        centroid /= (norm(centroid) + 1e-8)
+
+        # 2. Compute Mass (Logarithmic growth)
+        import math
+        trace_count = len(vecs)
+        mass = 1.0 + 0.75 * math.log1p(trace_count)
+
+        # 3. Update GravityField
+        # Access via store.sim (Gravity instance)
+        gravity = getattr(self.store, "sim", None)
+        if gravity is not None:
+            name = f"glyph:{glyph_id}"
+            # Use is_glyph=True to overwrite vector/mass
+            gravity.add_concept(name, vec=centroid, mass=mass, is_glyph=True)
 
     def recall(self, glyph_id: str, top_k: int = 5) -> List[Trace]:
         """Recall traces for a given glyph."""

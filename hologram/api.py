@@ -23,6 +23,7 @@ from .embeddings import (
 )
 from .gravity import GravityField  # ← integrate Memory Gravity
 from .text_utils import extract_concepts
+from .manifold import LatentManifold
 
 
 @dataclass
@@ -37,6 +38,7 @@ class Hologram:
     glyphs: GlyphRegistry
     text_encoder: Any
     image_encoder: Any
+    manifold: LatentManifold
     field: Optional[GravityField] = None
 
     # --- Initialization ---
@@ -68,6 +70,7 @@ class Hologram:
             text_enc = TextHasher(dim=VECTOR_DIM)
             img_enc = ImageStub(dim=VECTOR_DIM)
 
+        manifold = LatentManifold(dim=store.vec_dim)
         field = GravityField(dim=store.vec_dim) if use_gravity else None
 
         return cls(
@@ -75,13 +78,16 @@ class Hologram:
             glyphs=GlyphRegistry(store),
             text_encoder=text_enc,
             image_encoder=img_enc,
+            manifold=manifold,
             field=field,
         )
 
     # --- Write operations ---
     def add_text(self, glyph_id: str, text: str, trace_id: Optional[str] = None, do_extract_concepts: bool = False, **meta):
         trace_id = trace_id or f"text:{abs(hash(text))%10**10}"
-        vec = self.text_encoder.encode(text)
+        # Use manifold for alignment
+        vec = self.manifold.align_text(text, self.text_encoder)
+        
         tr = Trace(trace_id=trace_id, kind="text", content=text, vec=vec, meta=meta)
         self.glyphs.attach_trace(glyph_id, tr)
         if self.field:
@@ -90,7 +96,8 @@ class Hologram:
             if do_extract_concepts:
                 concepts = extract_concepts(text)
                 for concept_text in concepts:
-                    c_vec = self.text_encoder.encode(concept_text)
+                    # Concepts also go through manifold
+                    c_vec = self.manifold.align_text(concept_text, self.text_encoder)
                     self.field.add(concept_text, vec=c_vec)
                     if self.field.check_mitosis(concept_text):
                         print(f"[Gravity] Mitosis occurred for '{concept_text}'")
@@ -99,7 +106,9 @@ class Hologram:
 
     def add_image_path(self, glyph_id: str, path: str, trace_id: Optional[str] = None, **meta):
         trace_id = trace_id or f"image:{abs(hash(path))%10**10}"
-        vec = self.image_encoder.encode_path(path)
+        # Use manifold for alignment
+        vec = self.manifold.align_image(path, self.image_encoder)
+        
         tr = Trace(trace_id=trace_id, kind="image", content=path, vec=vec, meta=meta)
         self.glyphs.attach_trace(glyph_id, tr)
         if self.field:
@@ -111,11 +120,13 @@ class Hologram:
         return self.glyphs.recall(glyph_id)
 
     def search_text(self, query: str, top_k: int = 5):
-        qv = self.text_encoder.encode(query)
+        # Use manifold for alignment
+        qv = self.manifold.align_text(query, self.text_encoder)
         return self.glyphs.search_across(qv, top_k=top_k)
 
     def search_image_path(self, path: str, top_k: int = 5):
-        qv = self.image_encoder.encode_path(path)
+        # Use manifold for alignment
+        qv = self.manifold.align_image(path, self.image_encoder)
         return self.glyphs.search_across(qv, top_k=top_k)
 
     # --- Field analytics ---
@@ -181,12 +192,15 @@ class Hologram:
             field = GravityField(dim=store.vec_dim)
         else:
             field = None
+            
+        manifold = LatentManifold(dim=store.vec_dim)
 
         return cls(
             store=store,
             glyphs=GlyphRegistry(store),
             text_encoder=text_enc,
             image_encoder=img_enc,
+            manifold=manifold,
             field=field,
         )
     def init_memory(self, save_path="data/smi_state.json"):

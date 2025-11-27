@@ -195,58 +195,52 @@ class Gravity:
             if len(neighbors) < 3:
                 return False
                 
-            # 2. Cluster neighbors (Simple 2-Means)
-            # We pick two furthest neighbors as seeds
-            max_dist = -1.0
-            seed1, seed2 = None, None
+            # 2. Cluster neighbors using FAISS K-means (Geometry-Based)
+            vecs = np.stack([self.concepts[n].vec for n in neighbors]).astype('float32')
+            d = vecs.shape[1]
             
-            # Find furthest pair among neighbors
-            # Optimization: Just check a few pairs or use PCA? 
-            # Let's do a quick scan
-            vecs = [self.concepts[n].vec for n in neighbors]
+            # Use FAISS K-means for robust geometric clustering
+            # niter=20, nredo=1 for speed/quality balance
+            # min_points_per_centroid=1 to allow splitting small clusters
+            kmeans = faiss.Kmeans(d, k=2, niter=20, nredo=1, seed=self.seed, min_points_per_centroid=1)
+            kmeans.train(vecs)
             
-            # Simple heuristic: Project to 1D via PCA and split by median?
-            # Or just pick random seeds? Let's try furthest pair.
-            for i in range(len(neighbors)):
-                for j in range(i+1, len(neighbors)):
-                    d = 1.0 - cosine(vecs[i], vecs[j]) # Cosine distance
-                    if d > max_dist:
-                        max_dist = d
-                        seed1, seed2 = i, j
+            # Check distance between centroids
+            centroids = kmeans.centroids
+            dist = 1.0 - cosine(centroids[0], centroids[1])
             
-            if max_dist < threshold: # Neighbors are too close, no split needed
+            if dist < threshold: # Centroids are too close, no split needed
                 return False
                 
             # Assign neighbors to clusters
+            # index.search returns (distances, indices)
+            D, I = kmeans.index.search(vecs, 1)
+            
             cluster1 = []
             cluster2 = []
-            c1_vec = vecs[seed1]
-            c2_vec = vecs[seed2]
             
-            for i, n in enumerate(neighbors):
-                d1 = 1.0 - cosine(vecs[i], c1_vec)
-                d2 = 1.0 - cosine(vecs[i], c2_vec)
-                if d1 < d2:
-                    cluster1.append(n)
+            for i, cluster_idx in enumerate(I.flatten()):
+                if cluster_idx == 0:
+                    cluster1.append(neighbors[i])
                 else:
-                    cluster2.append(n)
-                    
+                    cluster2.append(neighbors[i])
+            
             if not cluster1 or not cluster2:
                 return False
                 
             # 3. Perform Mitosis
-            print(f"[Mitosis] Splitting '{name}' into '{name}_1' and '{name}_2'")
+            print(f"[Mitosis] Splitting '{name}' into '{name}_1' and '{name}_2' (Centroid Dist: {dist:.3f})")
             original = self.concepts[name]
             
             # Create siblings
             name1 = f"{name}_1"
             name2 = f"{name}_2"
             
-            # Vectors: nudge towards their clusters
-            vec1 = original.vec + 0.1 * c1_vec
+            # Vectors: Position at the centroids
+            vec1 = centroids[0]
             vec1 /= np.linalg.norm(vec1)
             
-            vec2 = original.vec + 0.1 * c2_vec
+            vec2 = centroids[1]
             vec2 /= np.linalg.norm(vec2)
             
             self.add_concept(name1, vec=vec1, mass=original.mass/2, negation=original.negation)
@@ -278,7 +272,7 @@ class Gravity:
                 
             return True
 
-    def add_concept(self, name: str, text: Optional[str] = None, vec: Optional[np.ndarray] = None, mass: float = 1.0, negation: Optional[bool] = None):
+    def add_concept(self, name: str, text: Optional[str] = None, vec: Optional[np.ndarray] = None, mass: float = 1.0, negation: Optional[bool] = None, is_glyph: bool = False):
         with self._lock:
             self.global_step += 1
             
@@ -286,7 +280,23 @@ class Gravity:
                 # Reinforcement: restore mass and update timestamp
                 c = self.concepts[name]
                 c.count += 1
-                c.mass = min(c.mass + mass, mass * 2.0)  # Cap at 2x base mass
+                
+                if is_glyph:
+                    # Glyphs are defined by their current centroid; overwrite
+                    if vec is not None:
+                        c.vec = vec / (np.linalg.norm(vec) + 1e-8)
+                    c.mass = mass
+                else:
+                    # Regular concept: blend in new vector + mass
+                    if vec is not None:
+                        v = vec / (np.linalg.norm(vec) + 1e-8)
+                        total_mass = c.mass + mass
+                        c.vec = (c.vec * c.mass + v * mass) / total_mass
+                        c.vec /= (np.linalg.norm(c.vec) + 1e-8)
+                        c.mass = total_mass
+                    else:
+                        c.mass = min(c.mass + mass, mass * 2.0)  # Cap at 2x base mass
+                
                 c.last_reinforced = self.global_step
                 return
             
