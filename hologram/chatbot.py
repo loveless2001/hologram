@@ -151,11 +151,12 @@ class ChatMemory:
         # DECOMPOSITION: Extract concepts and add them to the gravity field
         # This allows individual ideas to drift and interact based on the quantization level
         # Now handled by Hologram.add_text with extract_concepts=True
+        # UPDATE: Disabled for chat to prevent pollution of the concept graph with system prompts/hallucinations
         self.hologram.add_text(
             glyph_id=self.session_glyph(session_id),
             text=content,
             trace_id=trace_id,
-            do_extract_concepts=True,
+            do_extract_concepts=False,  # Changed from True to False
             role=role,
             session_id=session_id,
             timestamp=ts

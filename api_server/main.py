@@ -4,6 +4,7 @@ import shutil
 import threading
 from pathlib import Path
 from typing import List, Optional
+import numpy as np
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body
 from fastapi.staticfiles import StaticFiles  # Added for viz
@@ -64,6 +65,12 @@ def _load_kb_internal(kb_name: Optional[str]):
     
     # Load content line by line
     print(f"Loading and decomposing KB: {kb_name}")
+    
+    # Track added concepts for deduplication (Fix 4)
+    added_concept_vectors = []
+    added_concept_names = []
+    dedup_threshold = 0.95  # Skip concepts >95% similar to existing ones
+    
     with open(kb_path, "r") as f:
         for line in f:
             text = line.strip()
@@ -71,9 +78,25 @@ def _load_kb_internal(kb_name: Optional[str]):
                 # Decompose text into atomic concepts
                 concepts = extract_concepts(text)
                 for concept in concepts:
-                    # Add each concept to the root glyph
-                    memory.add_text("root", concept)
+                    # DEDUPLICATION: Check if this concept is too similar to existing ones
+                    concept_vec = memory.manifold.align_text(concept, memory.text_encoder)
+                    
+                    is_duplicate = False
+                    for existing_vec, existing_name in zip(added_concept_vectors, added_concept_names):
+                        similarity = float(np.dot(concept_vec, existing_vec) / 
+                                         (np.linalg.norm(concept_vec) * np.linalg.norm(existing_vec) + 1e-8))
+                        if similarity > dedup_threshold:
+                            is_duplicate = True
+                            print(f"  [Dedup] Skipping '{concept[:40]}...' (similar to '{existing_name[:40]}...' @ {similarity:.3f})")
+                            break
+                    
+                    if not is_duplicate:
+                        # Add unique concept
+                        memory.add_text("root", concept)
+                        added_concept_vectors.append(concept_vec)
+                        added_concept_names.append(concept)
     
+    print(f"Loaded {len(added_concept_names)} unique concepts (deduplicated)")
     current_kb_name = kb_name
     chat_memory = ChatMemory(memory)
 
@@ -81,6 +104,40 @@ def _load_kb_internal(kb_name: Optional[str]):
 def load_kb(kb_name: Optional[str]):
     with _kb_lock:
         _load_kb_internal(kb_name)
+
+def transform_strength_for_display(raw_strength: float) -> float:
+    """
+    Transform raw cosine similarity to a more informative display range.
+    
+    Uses arccos-based distance scaling (Fix 1) for geometric interpretation:
+    - Cosine similarity in [-1, 1] represents angle between vectors
+    - arccos maps this to angular distance [0, π]
+    - We invert to get similarity: 1 - (arccos(cos) / π)
+    
+    This naturally spreads out high similarities into distinct percentages.
+    
+    Args:
+        raw_strength: Raw cosine similarity in [-1, 1]
+    
+    Returns:
+        Display strength in [0, 1] with better visual differentiation
+    """
+    # Clamp to valid range for arccos
+    s = max(-0.9999, min(0.9999, raw_strength))
+    
+    # Angular distance: arccos gives angle in [0, π]
+    # Smaller angle = more similar
+    angle = np.arccos(s)
+    
+    # Convert to similarity: 1 - sqrt(angle / π)
+    # This spreads the high-similarity cluster (small angles) significantly:
+    #   cos=1.0 (0°) → similarity=1.0 (100%)
+    #   cos=0.9999 (0.81°) → similarity≈0.933 (93.3%)
+    #   cos=0.99 (8.1°) → similarity≈0.788 (78.8%)
+    #   cos=0.95 (18.2°) → similarity≈0.682 (68.2%)
+    similarity = 1.0 - np.sqrt(angle / np.pi)
+    
+    return float(similarity)
 
 # Initial load (empty)
 load_kb(None)
@@ -146,10 +203,16 @@ def search(request: SearchRequest):
                             # Resolve to content
                             if other_id in memory.store.traces:
                                 other_content = memory.store.traces[other_id].content
+                                
+                                # Transform strength for better UX
+                                # CLIP similarities cluster around 0.95-1.0 for related concepts
+                                # Apply non-linear mapping to spread them out for display
+                                display_strength = transform_strength_for_display(float(strength))
+                                
                                 relations_list.append(
                                     ConceptRelation(
                                         concept=other_content,
-                                        strength=float(strength)
+                                        strength=display_strength
                                     )
                                 )
                     

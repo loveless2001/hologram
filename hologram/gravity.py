@@ -205,6 +205,18 @@ class Gravity:
             if name == new_name:
                 continue
             sim = cosine(new.vec, other.vec)
+            
+            # RECORD RELATION BEFORE DRIFT (preserves original semantic distance)
+            # This ensures relations reflect true semantic similarity, not post-drift convergence
+            polarity = -1.0 if new.negation else 1.0
+            key = (min(name, new_name), max(name, new_name))
+            if key in self.relations:
+                old = self.relations[key] * self.gamma_decay
+                self.relations[key] = (old + polarity * sim) / 2.0
+            else:
+                self.relations[key] = polarity * sim
+            
+            # THEN APPLY DRIFT (for retrieval mechanics)
             direction = (new.vec - other.vec)
             dist = np.linalg.norm(direction) + 1e-8
             direction /= dist
@@ -215,18 +227,12 @@ class Gravity:
             if abs(step) < self.quantization_level:
                 continue
             
-            
             # NEGATION HANDLING: Reverse pull if new concept has negation
             # This makes negated concepts repel instead of attract
-            polarity = -1.0 if new.negation else 1.0
-            
             other.vec += polarity * step * direction
             new.vec -= polarity * step * direction
             other.vec /= (np.linalg.norm(other.vec) + 1e-8)
             new.vec /= (np.linalg.norm(new.vec) + 1e-8)
-            key = (min(name, new_name), max(name, new_name))
-            old = self.relations.get(key, 0.0) * self.gamma_decay
-            self.relations[key] = (old + polarity * sim) / 2.0
 
     def check_mitosis(self, name: str, threshold: float = 0.5) -> bool:
         """
