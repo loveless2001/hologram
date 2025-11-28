@@ -16,3 +16,4 @@ EOF
 .cursorrules
 .env
 data/
+.vscode/

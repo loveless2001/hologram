@@ -18,10 +18,11 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 - **Visual results**: Color-coded similarity scores (🟢 80%+, 🟡 60-79%, 🔵 <60%)
 - **Adjustable results**: Query 1-20 top matches
 
-### 🚀 Phase 4: Dynamic Graph Retrieval (New!)
-- **Physics-Aware Retrieval**: Queries are no longer static lookups. They spawn a **Probe** that drifts through the gravitational field, simulating associative recall.
-- **Symbolic Memory Interface (SMI)**: Retrieves a structured **Memory Packet** (nodes, edges, glyph anchors, trajectory) instead of a flat list.
-- **Hallucination Control**: The LLM is restricted to "reading" the Memory Packet, preventing it from inventing facts not present in the field.
+### 🚀 Phase 4: Field-Level Evaluation (New!)
+- **Stress Testing Suite**: Validates system coherence under pressure (intra-field stability, deformation, probe drift, memory degradation).
+- **Dynamic Topology**: Field deforms correctly when contradictory information is added (e.g., "Cats are solitary" vs "Cats are social").
+- **Robust Similarity**: Geometric scaling ensures relation strengths are meaningful (40-95%) rather than collapsing to 100%.
+- **Pollution Control**: Chat history is isolated from the concept graph to prevent system prompts from contaminating search results.
 
 ### 🧬 Concept Mitosis (Contextual Disambiguation)
 - **Geometry-Based Splitting**: Uses FAISS K-means to detect bimodal distributions in concept neighbors.

@@ -1,8 +1,0 @@
-# .gitignore
-__pycache__/
-*.pyc
-.venv/
-env/
-*.egg-info/
-.cache/
-.DS_Store
