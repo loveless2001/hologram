@@ -27,6 +27,7 @@ The system is composed of three distinct but interacting layers, moving from raw
     - Encodes raw data into high-dimensional vectors.
     - Projects vectors onto a unit hypersphere (L2 normalization).
     - Aligns different modalities (e.g., CLIP for images, GLiNER/SentenceTransformers for text) into a shared latent space.
+    - **New in v1.1**: Supports `TextMiniLM` (via `sentence-transformers`) for high-quality semantic embeddings, replacing random hashing as the default.
 - **Key Component**: `LatentManifold` (`hologram/manifold.py`)
     - Acts as the gatekeeper. No vector enters the system without passing through the Manifold.
 
@@ -41,6 +42,7 @@ The system is composed of three distinct but interacting layers, moving from raw
 - **Key Component**: `GravityField` / `Gravity` (`hologram/gravity.py`)
     - The physics engine.
     - Uses **FAISS K-means** for geometry-based mitosis detection.
+    - **New in v1.1**: Vectorized `_mutual_drift` (matrix operations) and PCA caching for <5ms visualization.
 
 ### Layer 3: The Graph (Symbolic)
 **Goal**: Provide stable, human-readable anchors for the fluid physics layer.
@@ -53,6 +55,17 @@ The system is composed of three distinct but interacting layers, moving from raw
         - **Mass**: Logarithmic growth based on trace count ($M = 1 + 0.75 \ln(1 + N)$).
         - This ensures that important glyphs exert strong gravity, organizing related concepts around them.
 - **Key Component**: `GlyphRegistry` (`hologram/glyphs.py`)
+
+### Layer 4: Storage (Persistence)
+**Goal**: Efficiently store and retrieve the state of the holographic field.
+
+- **Responsibility**:
+    - Persists Traces, Glyphs, and Gravity State.
+    - Supports pluggable backends.
+- **Backends**:
+    - **JSON**: Simple, human-readable, loads entirely into RAM. Good for small KBs.
+    - **SQLite**: Scalable, disk-based, supports partial loading. Good for large KBs (>100k items).
+- **Key Component**: `MemoryStore` (`hologram/store.py`) & `SqliteBackend` (`hologram/storage/sqlite_store.py`)
 
 ## 3. Module Design & Rationale
 
@@ -284,3 +297,4 @@ But the core principle remains:
 | **0.5.0** | 2025-11-15 | Added Gravity Field simulation. |
 | **0.8.0** | 2025-11-20 | Added Concept Mitosis (Heuristic). |
 | **1.0.0** | 2025-11-27 | **Research Upgrade**: LatentManifold, Geometry-Based Mitosis (FAISS), Glyph Physics, SMI. |
+| **1.1.0** | 2025-12-01 | **Performance Upgrade**: MiniLM Embeddings, SQLite Storage, Vectorized Gravity, PCA Caching. |

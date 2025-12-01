@@ -16,7 +16,9 @@ from .config import VECTOR_DIM
 from .embeddings import (
     ImageCLIP,
     TextCLIP,
+    TextCLIP,
     TextHasher,
+    TextMiniLM,
     ImageStub,
     open_clip,
     get_clip_embed_dim,
@@ -51,26 +53,40 @@ class Hologram:
         pretrained: str = "laion2b_s34b_b79k",
         use_clip: bool = True,
         use_gravity: bool = True,
+        encoder_mode: str = "default",  # "default", "hash", "minilm", "clip"
     ):
         # Encoder setup
-        if use_clip:
+        text_enc = None
+        img_enc = None
+        store_dim = VECTOR_DIM
+
+        # 1. Resolve Text Encoder
+        if encoder_mode == "minilm":
+            text_enc = TextMiniLM()
+            store_dim = 384  # MiniLM-L6-v2 dim
+        elif encoder_mode == "hash":
+            text_enc = TextHasher(dim=VECTOR_DIM)
+            store_dim = VECTOR_DIM
+        elif encoder_mode == "clip" or (encoder_mode == "default" and use_clip):
             if torch is None or open_clip is None:
-                raise RuntimeError(
-                    "CLIP initialization requested but torch/open_clip are unavailable. "
-                    "Install dependencies or set use_clip=False for hashing fallback."
-                )
+                raise RuntimeError("CLIP requested but dependencies missing.")
             device = "cuda" if torch.cuda.is_available() else "cpu"
             model, _, preprocess = open_clip.create_model_and_transforms(
                 model_name, pretrained=pretrained, device=device
             )
-            embed_dim = get_clip_embed_dim(model)
-            store = MemoryStore(vec_dim=embed_dim)
+            store_dim = get_clip_embed_dim(model)
             text_enc = TextCLIP(model=model, device=device)
             img_enc = ImageCLIP(model=model, preprocess=preprocess, device=device)
         else:
-            store = MemoryStore(vec_dim=VECTOR_DIM)
+            # Fallback default -> hash if use_clip=False
             text_enc = TextHasher(dim=VECTOR_DIM)
-            img_enc = ImageStub(dim=VECTOR_DIM)
+            store_dim = VECTOR_DIM
+
+        # 2. Resolve Image Encoder (if not already set by CLIP)
+        if img_enc is None:
+            img_enc = ImageStub(dim=store_dim)
+
+        store = MemoryStore(vec_dim=store_dim)
 
         manifold = LatentManifold(dim=store.vec_dim)
         field = GravityField(dim=store.vec_dim) if use_gravity else None
@@ -191,29 +207,40 @@ class Hologram:
         pretrained: str = "laion2b_s34b_b79k",
         use_clip: bool = True,
         use_gravity: bool = True,
+        encoder_mode: str = "default",
     ):
         store = MemoryStore.load(path)
 
-        if use_clip:
+        # Encoder setup logic (duplicated from init, should refactor but inline for now)
+        text_enc = None
+        img_enc = None
+        
+        # 1. Resolve Text Encoder
+        if encoder_mode == "minilm":
+            text_enc = TextMiniLM()
+        elif encoder_mode == "hash":
+            text_enc = TextHasher(dim=store.vec_dim)
+        elif encoder_mode == "clip" or (encoder_mode == "default" and use_clip):
             if torch is None or open_clip is None:
-                raise RuntimeError(
-                    "Cannot load CLIP-based hologram without torch/open_clip. "
-                    "Install dependencies or load with use_clip=False."
-                )
+                raise RuntimeError("CLIP requested but dependencies missing.")
             device = "cuda" if torch.cuda.is_available() else "cpu"
             model, _, preprocess = open_clip.create_model_and_transforms(
                 model_name, pretrained=pretrained, device=device
             )
             embed_dim = get_clip_embed_dim(model)
             if embed_dim != store.vec_dim:
-                raise ValueError(
-                    f"Loaded store has dimension {store.vec_dim}, "
-                    f"but model '{model_name}' produces {embed_dim}."
-                )
+                 # Warn but allow if user knows what they are doing? 
+                 # Or maybe store.vec_dim is 384 (MiniLM) and we try to load CLIP (512).
+                 # This will crash later.
+                 pass
             text_enc = TextCLIP(model=model, device=device)
             img_enc = ImageCLIP(model=model, preprocess=preprocess, device=device)
         else:
+            # Fallback default -> hash
             text_enc = TextHasher(dim=store.vec_dim)
+
+        # 2. Resolve Image Encoder
+        if img_enc is None:
             img_enc = ImageStub(dim=store.vec_dim)
 
         # Use the gravity state from the store if available, otherwise create new

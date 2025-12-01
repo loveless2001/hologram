@@ -1,0 +1,7 @@
+{
+  "num_traces": 19,
+  "ingest_sec": 4.5730,
+  "avg_ingest_sec": 0.2407,
+  "search_ms_top10": 0.25,
+  "viz_ms": 6.91
+}

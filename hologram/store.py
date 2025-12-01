@@ -3,10 +3,13 @@ import json
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union, Any
 import numpy as np
 
 from .gravity import Gravity  # fixed import
+
+# SqliteBackend import moved to bottom to avoid circular dependency
+
 
 
 # --- Data models ---
@@ -51,7 +54,9 @@ class VectorIndex:
 
     def upsert(self, key: str, vec: np.ndarray):
         with self._lock:
-            vec = vec.astype('float32').reshape(1, -1)
+            vec = vec.astype('float32')
+            vec /= (np.linalg.norm(vec) + 1e-8)
+            vec = vec.reshape(1, -1)
             self.index.add(vec)
             self.id_to_key.append(key)
 
@@ -59,7 +64,9 @@ class VectorIndex:
         with self._lock:
             if self.index.ntotal == 0:
                 return []
-            query = query.astype('float32').reshape(1, -1)
+            query = query.astype('float32')
+            query /= (np.linalg.norm(query) + 1e-8)
+            query = query.reshape(1, -1)
             D, I = self.index.search(query, top_k)
             results = []
             for score, idx in zip(D[0], I[0]):
@@ -70,12 +77,14 @@ class VectorIndex:
 # --- Core store ---
 class MemoryStore:
     """Persistent memory + glyph registry + gravity integration."""
-    def __init__(self, vec_dim: int):
+    def __init__(self, vec_dim: int, backend: Optional[Any] = None):
         self.vec_dim = vec_dim
         self.traces = {}
         self.glyphs = {}
         self.index = VectorIndex(vec_dim, use_gpu=True)
         self.sim = Gravity(dim=vec_dim)
+        self.backend = backend
+
 
     # --- Trace operations ---
     def add_trace(self, t: Trace):
@@ -125,6 +134,26 @@ class MemoryStore:
 
     # --- Persistence ---
     def save(self, path: str) -> None:
+        if path.endswith(".db") or path.endswith(".sqlite"):
+            if SqliteBackend is None:
+                raise RuntimeError("SqliteBackend not available.")
+            backend = SqliteBackend(path)
+            
+            # Save Meta
+            backend.save_meta("vec_dim", str(self.vec_dim))
+            backend.save_meta("gravity_state", json.dumps(self.sim.get_state()))
+            
+            # Save Traces
+            for t in self.traces.values():
+                backend.save_trace(t)
+                
+            # Save Glyphs
+            for g in self.glyphs.values():
+                backend.save_glyph(g)
+                
+            backend.close()
+            return
+
         path_obj = Path(path)
         path_obj.parent.mkdir(parents=True, exist_ok=True)
         data = {
@@ -154,6 +183,41 @@ class MemoryStore:
 
     @classmethod
     def load(cls, path: str) -> "MemoryStore":
+        if path.endswith(".db") or path.endswith(".sqlite"):
+            if SqliteBackend is None:
+                raise RuntimeError("SqliteBackend not available.")
+            backend = SqliteBackend(path)
+            
+            vec_dim_str = backend.load_meta("vec_dim")
+            if not vec_dim_str:
+                raise ValueError("Invalid SQLite store: missing vec_dim")
+            vec_dim = int(vec_dim_str)
+            
+            store = cls(vec_dim=vec_dim, backend=backend)
+            
+            # Restore gravity
+            gravity_state_json = backend.load_meta("gravity_state")
+            if gravity_state_json:
+                store.sim.set_state(json.loads(gravity_state_json))
+                print(f"[MemoryStore] Restored gravity field state ({len(store.sim.concepts)} concepts)")
+                
+            # Restore traces
+            traces = backend.load_traces()
+            for t in traces:
+                store.traces[t.trace_id] = t
+                store.index.upsert(t.trace_id, t.vec)
+                # Gravity sync (if not restored from state)
+                if not gravity_state_json or t.trace_id not in store.sim.concepts:
+                    store.sim.add_concept(t.trace_id, vec=t.vec)
+                    
+            # Restore glyphs
+            glyphs = backend.load_glyphs()
+            for g in glyphs:
+                store.glyphs[g.glyph_id] = g
+                
+            backend.close()
+            return store
+
         path_obj = Path(path)
         if not path_obj.exists():
             raise FileNotFoundError(f"Store file not found: {path}")
@@ -198,3 +262,9 @@ class MemoryStore:
             store.glyphs[glyph.glyph_id] = glyph
 
         return store
+
+# Lazy import to avoid circular dependency
+try:
+    from .storage.sqlite_store import SqliteBackend
+except ImportError:
+    SqliteBackend = None

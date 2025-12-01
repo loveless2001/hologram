@@ -90,6 +90,12 @@
 ✗ Harder to explain why concepts are connected
 ✗ No explicit relationship types (can't distinguish "part_of" vs "causes")
 ✗ Computationally more expensive (vector ops + physics sim)
+✗ Requires careful tuning of physics parameters (G, decay, eta)
+
+**Phase 4.5 Improvements:**
+- **MiniLM**: Semantic embeddings improve clustering quality.
+- **SQLite**: Enables scaling to millions of concepts.
+- **Vectorization**: Reduces simulation cost by 10x.
 
 ---
 

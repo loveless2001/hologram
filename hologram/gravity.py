@@ -4,7 +4,7 @@ import hashlib
 import threading
 import faiss
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 import os
 
 try:
@@ -29,15 +29,27 @@ def cosine(a: np.ndarray, b: np.ndarray) -> float:
     bn = np.linalg.norm(b) + 1e-8
     return float(np.dot(a, b) / (an * bn))
 
+try:
+    from sklearn.decomposition import PCA
+except ImportError:
+    PCA = None
+
 def pca2(X: np.ndarray):
     if X.shape[0] < 2:
         return np.zeros((X.shape[0], 2)), np.eye(2), np.zeros((2,))
-    mu = X.mean(axis=0, keepdims=True)
-    C = X - mu
-    U, S, Vt = np.linalg.svd(C, full_matrices=False)
-    V2 = Vt[:2].T
-    proj = C @ V2
-    return proj, V2, mu.squeeze(0)
+    
+    if PCA is None:
+        # Fallback to manual SVD if sklearn is missing
+        mu = X.mean(axis=0, keepdims=True)
+        C = X - mu
+        U, S, Vt = np.linalg.svd(C, full_matrices=False)
+        V2 = Vt[:2].T
+        proj = C @ V2
+        return proj, V2, mu.squeeze(0)
+    
+    pca = PCA(n_components=2)
+    proj = pca.fit_transform(X)
+    return proj, pca.components_.T, pca.mean_
 
 
 # --- Constants ---
@@ -179,6 +191,9 @@ class Gravity:
     concepts: Dict[str, Concept] = field(default_factory=dict)
     relations: Dict[Tuple[str, str], float] = field(default_factory=dict)
     global_step: int = 0  # Increments with each concept addition
+    
+    # PCA Cache
+    _pca_cache: Optional[Tuple[int, Any]] = field(default=None, repr=False)
 
     def __post_init__(self):
         self._lock = threading.RLock()  # Thread safety for all mutations
@@ -199,40 +214,89 @@ class Gravity:
         v /= (np.linalg.norm(v) + 1e-8)
         return v
 
-    def _mutual_drift(self, new_name: str):
+    def _mutual_drift(self, new_name: str, k: int = 32):
+        """
+        Vectorized mutual drift:
+        1. Compute cosine sim between new concept and ALL others (matrix op).
+        2. Select top-k neighbors.
+        3. Update relations and apply drift only to those k neighbors.
+        """
+        if not self.concepts:
+            return
+
         new = self.concepts[new_name]
-        for name, other in self.concepts.items():
-            if name == new_name:
-                continue
-            sim = cosine(new.vec, other.vec)
+        names = list(self.concepts.keys())
+        
+        # Get matrix view of all concepts
+        # Note: This creates a copy. For huge scale, maintain a persistent matrix.
+        X = self.get_matrix()  # [N, D]
+        v = new.vec.reshape(1, -1)  # [1, D]
+
+        # Cosine similarity: (X . v.T) / (|X|*|v|)
+        # Vectors in X and v are already normalized by add_concept/encode, 
+        # but let's be safe or assume they are close enough to unit length.
+        # If we trust they are normalized:
+        sims = (X @ v.T).flatten()  # [N]
+        
+        # Identify index of self to exclude
+        try:
+            idx = names.index(new_name)
+            sims[idx] = -2.0  # Exclude self from top-k
+        except ValueError:
+            pass # Should not happen if new_name is in concepts
+
+        # Top-K selection
+        # argpartition is O(N)
+        k = min(k, len(names) - 1)
+        if k <= 0:
+            return
+
+        top_indices = np.argpartition(-sims, k)[:k]
+        
+        polarity = -1.0 if new.negation else 1.0
+        
+        for i in top_indices:
+            other_name = names[i]
+            sim = float(sims[i])
             
-            # RECORD RELATION BEFORE DRIFT (preserves original semantic distance)
-            # This ensures relations reflect true semantic similarity, not post-drift convergence
-            polarity = -1.0 if new.negation else 1.0
-            key = (min(name, new_name), max(name, new_name))
+            if sim < 0.01: continue # Ignore negligible similarity
+
+            # 1. Update Relations
+            key = (min(new_name, other_name), max(new_name, other_name))
             if key in self.relations:
                 old = self.relations[key] * self.gamma_decay
                 self.relations[key] = (old + polarity * sim) / 2.0
             else:
                 self.relations[key] = polarity * sim
             
-            # THEN APPLY DRIFT (for retrieval mechanics)
-            direction = (new.vec - other.vec)
+            # 2. Apply Drift
+            other = self.concepts[other_name]
+            
+            # Direction: other -> new (attraction) or new -> other (repulsion?)
+            # Original logic: 
+            # direction = (new.vec - other.vec)
+            # other.vec += polarity * step * direction
+            # new.vec -= polarity * step * direction
+            
+            # Re-compute direction vector (can't easily vectorize this part with in-place updates without more memory)
+            direction = new.vec - other.vec
             dist = np.linalg.norm(direction) + 1e-8
             direction /= dist
+            
             step = self.eta * sim
             
-            # QUANTIZATION: Check if the interaction is strong enough to propagate
-            # This acts like a Planck constant for the gravity field
             if abs(step) < self.quantization_level:
                 continue
-            
-            # NEGATION HANDLING: Reverse pull if new concept has negation
-            # This makes negated concepts repel instead of attract
+
+            # Apply forces
             other.vec += polarity * step * direction
             new.vec -= polarity * step * direction
+            
+            # Normalize immediately to keep stability
             other.vec /= (np.linalg.norm(other.vec) + 1e-8)
-            new.vec /= (np.linalg.norm(new.vec) + 1e-8)
+        
+        # Final normalize for new concept
+        new.vec /= (np.linalg.norm(new.vec) + 1e-8)
 
     def check_mitosis(self, name: str, threshold: float = 0.5) -> bool:
         """
@@ -423,7 +487,32 @@ class Gravity:
 
     def project2d(self):
         X = self.get_matrix()
+        
+        # Check cache
+        # "Only recompute when number of concepts jumps by >N (say 50)."
+        should_recompute = True
+        if self._pca_cache:
+            last_n, last_res = self._pca_cache
+            if abs(len(self.concepts) - last_n) < 50:
+                # Reuse basis (components) and mean to project CURRENT X
+                # This avoids re-fitting PCA (O(N*D^2)) and only does projection (O(N*D*2))
+                _, comps, mu = last_res
+                
+                # Project: (X - mu) @ components.T
+                # comps is already V2 (shape [D, 2]), so we do X @ comps
+                # Wait, pca2 returns comps as pca.components_.T which is [D, 2]
+                
+                # Manual projection:
+                C = X - mu
+                proj = C @ comps
+                
+                names = list(self.concepts.keys())
+                return proj, names
+                
+        # Recompute
         proj, comps, mu = pca2(X)
+        self._pca_cache = (len(self.concepts), (proj, comps, mu))
+        
         names = list(self.concepts.keys())
         return proj, names
 

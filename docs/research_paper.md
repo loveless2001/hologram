@@ -19,7 +19,7 @@ We propose **Holographic Memory**, a hybrid system that combines the semantic po
 The core of Holographic Memory is the **Gravity Field**, a simulation where every stored concept is a vector with an associated "mass".
 
 ### 2.1 Memory Gravity
-Concepts are embedded into a vector space (using CLIP or hashing encoders). A gravitational simulation is applied where:
+Concepts are embedded into a vector space (using MiniLM, CLIP, or hashing encoders). A gravitational simulation is applied where:
 - **Attraction**: Concepts with high cosine similarity exert an attractive force on each other, pulling them closer in the vector space.
 - **Clustering**: Over time, related concepts naturally form dense clusters without explicit categorization.
 
@@ -50,10 +50,10 @@ A critical challenge in semantic memory is "polysemy" – words having multiple 
 
 The system is implemented in Python with the following components:
 
-- **Dual Encoder Stack**: Supports both lightweight hashing (for speed/portability) and CLIP-based encoders (for multimodal semantic understanding).
+- **Triple Encoder Stack**: Supports lightweight hashing (speed), MiniLM (semantic text), and CLIP (multimodal).
 - **FAISS Backend**: Utilizes Facebook AI Similarity Search for efficient nearest-neighbor lookups and field operations.
 - **Gravity Simulation Engine**: A custom physics layer that manages concept vectors, masses, and force interactions.
-- **JSON Persistence**: The state is serialized to JSON, capturing not just the data but the evolved vector topology, allowing the "mind" to be saved and reloaded.
+- **Hybrid Persistence**: Supports both JSON (for portability) and SQLite (for scalability), capturing the evolved vector topology.
 
 ## 4. Evaluation Framework
 

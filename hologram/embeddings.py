@@ -15,6 +15,12 @@ try:
 except ImportError:  # pragma: no cover - exercised only when open_clip missing
     open_clip = None  # type: ignore
 
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    SentenceTransformer = None
+
+
 
 # -------------------------
 # Lightweight hashing encoders (keep for demos)
@@ -142,6 +148,20 @@ class TextCLIP:
         return feats.squeeze(0).detach().cpu().numpy().astype("float32")
 
 
+class TextMiniLM:
+    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+        if SentenceTransformer is None:
+            raise RuntimeError(
+                "sentence-transformers is required for MiniLM encoding. "
+                "Install it with `pip install sentence-transformers`."
+            )
+        self.model = SentenceTransformer(model_name)
+
+    def encode(self, text: str) -> np.ndarray:
+        vec = self.model.encode(text, normalize_embeddings=True)
+        return vec.astype("float32")
+
+
 # Utility: get embedding dim from a CLIP model (works across variants)
 def get_clip_embed_dim(model: Any) -> int:
     if hasattr(model, "text_projection") and model.text_projection is not None:
@@ -157,6 +177,7 @@ __all__ = [
     "ImageStub",
     "ImageCLIP",
     "TextCLIP",
+    "TextMiniLM",
     "get_clip_embed_dim",
     "open_clip",
 ]

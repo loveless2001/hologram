@@ -3,10 +3,11 @@
 ## Quick Start
 
 ```bash
-python benchmark.py
+python scripts/profile_ingest.py
+python scripts/profile_search.py
 ```
 
-This will run the full benchmark suite and output results to `benchmark_results.json`.
+This will run the performance profiling suite and output results to `perf/baseline-vX.json`.
 
 ---
 
@@ -48,7 +49,7 @@ from hologram import Hologram
 from benchmark import HologramBenchmark
 
 # Build your knowledge base
-hg = Hologram.init(use_clip=False)
+hg = Hologram.init(encoder_mode="minilm", use_gravity=True)
 hg.glyphs.create("physics", title="Physics")
 
 # Add knowledge
@@ -107,13 +108,13 @@ To compare with traditional approaches:
 
 ```python
 # Your holographic system
-hg = Hologram.init(use_clip=False)
+hg = Hologram.init(encoder_mode="minilm", use_gravity=True)
 # ... add data ...
 bench_holo = HologramBenchmark(hg)
 results_holo = bench_holo.run_full_suite(test_data)
 
 # Pure vector DB (no gravity, no decay)
-hg_baseline = Hologram.init(use_clip=False, use_gravity=False)
+hg_baseline = Hologram.init(encoder_mode="minilm", use_gravity=False)
 # ... add same data ...
 bench_baseline = HologramBenchmark(hg_baseline)
 results_baseline = bench_baseline.run_full_suite(test_data)
@@ -231,6 +232,18 @@ A: May need:
 - Better embeddings (try use_clip=True with actual CLIP)
 - More data (< 100 concepts may not cluster well)
 - Tuned decay parameters
+
+---
+
+## Phase 4.5 Performance Scripts
+
+For detailed performance profiling, use the scripts in `scripts/`:
+
+- `scripts/profile_ingest.py`: Measures ingestion speed (lines/sec)
+- `scripts/profile_search.py`: Measures search and visualization latency
+- `scripts/build_kb.py`: Concurrent ingestion pipeline for large KBs
+
+See `perf/README.md` for more details.
 
 ---
 
