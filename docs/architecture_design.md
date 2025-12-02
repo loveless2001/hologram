@@ -67,6 +67,24 @@ The system is composed of three distinct but interacting layers, moving from raw
     - **SQLite**: Scalable, disk-based, supports partial loading. Good for large KBs (>100k items).
 - **Key Component**: `MemoryStore` (`hologram/store.py`) & `SqliteBackend` (`hologram/storage/sqlite_store.py`)
 
+### Layer 5: MG Scorer (Quality Metrics)
+**Goal**: Quantify the geometric health and stability of the semantic field.
+
+- **Responsibility**:
+    - Measures **Coherence**: How tightly clustered vectors are (inverse dispersion).
+    - Measures **Curvature**: How linear/smooth semantic trajectories are.
+    - Measures **Entropy**: Semantic dispersion across principal components.
+    - Calculates **Collapse Risk**: Composite instability indicator.
+    - Computes **Gradient**: Direction of semantic tension.
+- **Use Cases**:
+    - **LLM Output Validation**: Detect hallucinations and contradictions.
+    - **Memory Health Monitoring**: Track field stability over time.
+    - **Retrieval Quality Gates**: Filter incoherent search results.
+    - **Topic Drift Detection**: Identify when conversations lose focus.
+- **Key Component**: `mg_scorer` (`hologram/mg_scorer.py`)
+    - **New in v1.2**: Provides geometric analysis of vector sets and sequences.
+    - Integrated into `Hologram` API via `score_text()` and `score_trace()` methods.
+
 ## 3. Module Design & Rationale
 
 ### `hologram/manifold.py`
@@ -105,6 +123,19 @@ The system is composed of three distinct but interacting layers, moving from raw
     2.  Create Trace -> Attach to Glyph.
     3.  Extract sub-concepts -> Add to Gravity.
     4.  Trigger Mitosis checks.
+
+### `hologram/mg_scorer.py`
+**Rationale**: Need quantitative metrics to assess memory field health and detect semantic collapse.
+**Design**:
+- `MGScore` dataclass: Encapsulates all geometric metrics.
+- Core functions:
+    - `coherence()`: 1 - average cosine distance (all-pairs).
+    - `curvature()`: Straightness index using triangle inequality on ordered sequences.
+    - `semantic_entropy()`: Eigenvalue-based dispersion measure.
+    - `collapse_risk()`: Composite heuristic combining coherence, entropy, and curvature.
+    - `gradient()`: Average deviation from centroid (semantic tension direction).
+- `mg_score()`: Main entry point that computes all metrics for a vector set.
+- **Integration**: `Hologram.score_text()` and `Hologram.score_trace()` expose scoring to API users.
 
 ## 4. Data Flow
 
@@ -298,3 +329,4 @@ But the core principle remains:
 | **0.8.0** | 2025-11-20 | Added Concept Mitosis (Heuristic). |
 | **1.0.0** | 2025-11-27 | **Research Upgrade**: LatentManifold, Geometry-Based Mitosis (FAISS), Glyph Physics, SMI. |
 | **1.1.0** | 2025-12-01 | **Performance Upgrade**: MiniLM Embeddings, SQLite Storage, Vectorized Gravity, PCA Caching. |
+| **1.2.0** | 2025-12-02 | **Quality Metrics**: MG Scorer module for semantic field health monitoring and collapse detection. |

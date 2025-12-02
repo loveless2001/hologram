@@ -63,7 +63,12 @@ We propose a set of metrics to evaluate the quality of the dynamic field:
 - **Repulsion Score**: Ratio of similarity change after a negative assertion ($< 1.0$ indicates success).
 - **Decay Half-Life**: The number of steps required for an unreinforced concept to lose 50% of its mass.
 - **Cluster Silhouette**: Measures the separation quality of emergent concept clusters.
+- **MG Scorer Metrics** (v1.2):
+    - **Coherence**: Measures cluster tightness (1 - average cosine distance).
+    - **Curvature**: Quantifies semantic trajectory smoothness.
+    - **Collapse Risk**: Composite indicator for field instability and semantic saturation.
 
+The MG Scorer provides real-time health monitoring, detecting semantic collapse and hallucination patterns in LLM-generated content.
 Initial benchmarks demonstrate that the system successfully models attraction (Score > 1.0) and repulsion (Score < 1.0) while maintaining sub-millisecond query latency for typical knowledge bases.
 
 ## 5. Discussion: Comparison with Knowledge Graphs
