@@ -17,3 +17,4 @@ EOF
 .env
 data/
 .vscode/
+docs/mg_scorer_implementation.md

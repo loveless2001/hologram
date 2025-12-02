@@ -27,7 +27,9 @@ from .gravity import GravityField  # ← integrate Memory Gravity
 from .text_utils import extract_concepts
 from .manifold import LatentManifold
 from .retrieval import extract_local_field
+from .retrieval import extract_local_field
 from .smi import MemoryPacket
+from .mg_scorer import MGScore, mg_score
 
 
 @dataclass
@@ -189,6 +191,46 @@ class Hologram:
         """Advance field decay (Memory Gravity loss)."""
         if self.field:
             self.field.step_decay(steps=steps)
+
+    # --- MG Scoring ---
+    def score_text(self, texts: List[str]) -> MGScore:
+        """
+        Compute MGScore for a list of text strings.
+        Useful for evaluating coherence of a generated paragraph or a set of ideas.
+        """
+        vectors = [self.manifold.align_text(t, self.text_encoder) for t in texts]
+        return mg_score(vectors)
+
+    def score_trace(self, trace_ids: List[str]) -> MGScore:
+        """
+        Compute MGScore for a list of trace IDs.
+        Useful for evaluating the coherence of a retrieval result or a memory cluster.
+        """
+        vectors = []
+        for tid in trace_ids:
+            # Try to find in field first (faster?) or store
+            # Store is source of truth for vectors
+            # But field might have updated positions if gravity is on?
+            # Actually store.traces has the original vector. 
+            # Gravity field has the *current* position.
+            # We should probably use the *current* position if gravity is active.
+            
+            if self.field and tid in self.field.sim.concepts:
+                # If it's a concept in gravity
+                vectors.append(self.field.sim.concepts[tid].vec)
+            elif tid in self.store.traces:
+                # Fallback to static trace vector
+                vectors.append(self.store.traces[tid].vec)
+            else:
+                # Skip unknown or warn?
+                continue
+        
+        if not vectors:
+            # Return a zero-score or raise?
+            # Let's return a dummy score with 0 coherence
+            return MGScore(0.0, 0.0, 0.0, 0.0, np.zeros(self.store.vec_dim))
+            
+        return mg_score(vectors)
 
     # --- Utility ---
     def summarize_hit(self, trace: Trace, score: float) -> str:

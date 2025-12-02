@@ -36,19 +36,35 @@ import faiss
 class VectorIndex:
     def __init__(self, dim: int, use_gpu: bool = True):
         self.dim = dim
-        self.use_gpu = use_gpu and faiss.get_num_gpus() > 0
         self._lock = threading.RLock()  # Thread safety
 
-        # CPU index first
-        self.index = faiss.IndexFlatIP(dim)
-
-        # Move to GPU if possible
-        if self.use_gpu:
-            print(f"[FAISS] Using GPU backend ({faiss.get_num_gpus()} GPUs available)")
-            res = faiss.StandardGpuResources()
-            self.index = faiss.index_cpu_to_gpu(res, 0, self.index)
+        # Try GPU first if requested
+        self.use_gpu = False
+        if use_gpu:
+            try:
+                # Check if GPU functions exist
+                if hasattr(faiss, 'StandardGpuResources') and hasattr(faiss, 'index_cpu_to_gpu'):
+                    # Create CPU index first
+                    cpu_index = faiss.IndexFlatIP(dim)
+                    
+                    # Try to move to GPU
+                    res = faiss.StandardGpuResources()
+                    self.index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
+                    self.use_gpu = True
+                    print(f"[FAISS] Using GPU backend")
+                else:
+                    # GPU functions not available (CPU-only build)
+                    self.index = faiss.IndexFlatIP(dim)
+                    print("[FAISS] GPU functions not available, using CPU backend")
+            except Exception as e:
+                # GPU initialization failed (no GPU, CUDA issues, etc.)
+                self.index = faiss.IndexFlatIP(dim)
+                print(f"[FAISS] GPU initialization failed: {e}")
+                print("[FAISS] Falling back to CPU backend")
         else:
-            print("[FAISS] Using CPU backend")
+            # User requested CPU
+            self.index = faiss.IndexFlatIP(dim)
+            print("[FAISS] Using CPU backend (user requested)")
 
         self.id_to_key = []
 

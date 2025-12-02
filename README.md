@@ -44,6 +44,13 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 - **Interactive**: Hover tooltips, zoom/pan, auto-refresh
 - **Human-readable labels**: Shows actual text content instead of hash IDs
 
+### 🧲 MG Scorer: Semantic Quality Metrics (New!)
+- **Coherence**: Measure how tightly clustered text vectors are (0-1 scale)
+- **Curvature**: Detect semantic drift and topic shifts in ordered sequences
+- **Entropy**: Quantify semantic dispersion across principal components
+- **Collapse Risk**: Early warning system for hallucinations and contradictions
+- **Use cases**: LLM output validation, memory health monitoring, retrieval quality gates
+
 ---
 
 ## Highlights
