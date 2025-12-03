@@ -46,6 +46,7 @@ class Hologram:
     image_encoder: Any
     manifold: LatentManifold
     field: Optional[GravityField] = None
+    project: str = "default"  # NEW: Project namespace
 
     # --- Initialization ---
     @classmethod
@@ -55,7 +56,8 @@ class Hologram:
         pretrained: str = "laion2b_s34b_b79k",
         use_clip: bool = True,
         use_gravity: bool = True,
-        encoder_mode: str = "default",  # "default", "hash", "minilm", "clip"
+        encoder_mode: str = "minilm",  # "default", "hash", "minilm", "clip"
+        auto_ingest_system: bool = True,  # NEW: Auto-load system concepts
     ):
         # Encoder setup
         text_enc = None
@@ -93,17 +95,55 @@ class Hologram:
         manifold = LatentManifold(dim=store.vec_dim)
         field = GravityField(dim=store.vec_dim) if use_gravity else None
 
-        return cls(
+        instance = cls(
             store=store,
             glyphs=GlyphRegistry(store),
             text_encoder=text_enc,
             image_encoder=img_enc,
             manifold=manifold,
             field=field,
+            project="default"  # Default project namespace
         )
+        
+        # NEW: Auto-ingest system concepts as Tier 2
+        if auto_ingest_system and use_gravity and field:
+            from .system_kb import get_system_concepts
+            from .text_utils import extract_concepts
+            
+            # Check if system concepts already exist (e.g., from loaded state)
+            existing_system_concepts = [
+                name for name in field.sim.concepts.keys()
+                if name.startswith("system:") and field.sim.concepts[name].tier == 2
+            ]
+            
+            # Only ingest if no system concepts found
+            if not existing_system_concepts:
+                system_text = get_system_concepts()
+                concepts = extract_concepts(system_text)
+                
+                for concept_text in concepts:
+                    concept_vec = instance.manifold.align_text(concept_text, text_enc)
+                    concept_id = f"system:{abs(hash(concept_text))%10**10}"
+                    
+                    instance.field.add(
+                        concept_id,
+                        concept_vec,
+                        tier=2,  # Tier 2: System concepts
+                        project="hologram",
+                        origin="system_design"
+                    )
+            else:
+                # System concepts already loaded from save file
+                pass
+        
+        return instance
 
     # --- Write operations ---
-    def add_text(self, glyph_id: str, text: str, trace_id: Optional[str] = None, do_extract_concepts: bool = False, **meta):
+    def add_text(self, glyph_id: str, text: str, trace_id: Optional[str] = None, do_extract_concepts: bool = False, add_to_field: bool = True, 
+                 # NEW parameters
+                 tier: int = 1,  # Default to Tier 1 (Domain)
+                 origin: str = "kb",  # "kb", "runtime", "manual", "system_design"
+                 **meta):
         # Normalize text (cleaning + spelling + fuzzy resolution)
         text, canonical_trace_id = normalize_text(text, store=self.store, encoder=self.text_encoder)
 
@@ -113,8 +153,14 @@ class Hologram:
         
         tr = Trace(trace_id=trace_id, kind="text", content=text, vec=vec, meta=meta)
         self.glyphs.attach_trace(glyph_id, tr)
-        if self.field:
-            self.field.add(trace_id, vec)
+        if self.field and add_to_field:
+            self.field.add(
+                trace_id, 
+                vec,
+                tier=tier,
+                project=self.project,
+                origin=origin
+            )
             
             # If fuzzy resolution found a canonical, trigger fusion
             if canonical_trace_id and canonical_trace_id != trace_id:
@@ -131,7 +177,13 @@ class Hologram:
                     # Concepts also go through manifold
                     c_vec = self.manifold.align_text(concept_text_normalized, self.text_encoder)
                     c_id = f"concept:{abs(hash(concept_text_normalized))%10**10}"
-                    self.field.add(c_id, vec=c_vec)
+                    self.field.add(
+                        c_id, 
+                        vec=c_vec,
+                        tier=tier,
+                        project=self.project,
+                        origin=origin
+                    )
                     
                     # Trigger fusion if needed
                     if concept_canonical_id and concept_canonical_id != c_id:
@@ -267,7 +319,8 @@ class Hologram:
         pretrained: str = "laion2b_s34b_b79k",
         use_clip: bool = True,
         use_gravity: bool = True,
-        encoder_mode: str = "default",
+        encoder_mode: str = "minilm",
+        auto_ingest_system: bool = True,  # NEW: Auto-load system concepts
     ):
         store = MemoryStore.load(path)
 
@@ -315,14 +368,45 @@ class Hologram:
             
         manifold = LatentManifold(dim=store.vec_dim)
 
-        return cls(
+        instance = cls(
             store=store,
             glyphs=GlyphRegistry(store),
             text_encoder=text_enc,
             image_encoder=img_enc,
             manifold=manifold,
             field=field,
+            project="default"
         )
+        
+        # NEW: Auto-ingest system concepts as Tier 2 (same logic as init)
+        if auto_ingest_system and use_gravity and field:
+            from .system_kb import get_system_concepts
+            from .text_utils import extract_concepts
+            
+            # Check if system concepts already exist (e.g., from loaded state)
+            existing_system_concepts = [
+                name for name in field.sim.concepts.keys()
+                if name.startswith("system:") and field.sim.concepts[name].tier == 2
+            ]
+            
+            # Only ingest if no system concepts found
+            if not existing_system_concepts:
+                system_text = get_system_concepts()
+                concepts = extract_concepts(system_text)
+                
+                for concept_text in concepts:
+                    concept_vec = instance.manifold.align_text(concept_text, text_enc)
+                    concept_id = f"system:{abs(hash(concept_text))%10**10}"
+                    
+                    instance.field.add(
+                        concept_id,
+                        concept_vec,
+                        tier=2,  # Tier 2: System concepts
+                        project="hologram",
+                        origin="system_design"
+                    )
+        
+        return instance
     # def init_memory(self, save_path="data/smi_state.json"):
     #     self.smi = SymbolicMemoryInterface(self.store, self.glyphs, save_path=save_path)
     #     return self.smi

@@ -134,6 +134,11 @@ def calibrate_quantization() -> float:
 
 
 # --- Core simulation (Memory Gravity) ---
+# Tier constants
+TIER_DOMAIN = 1  # Dynamic concepts (physics allowed)
+TIER_SYSTEM = 2  # System concepts (physics forbidden)
+TIER_META = 3  # Meta-operators (not stored as vectors)
+
 @dataclass
 class Concept:
     name: str
@@ -144,6 +149,40 @@ class Concept:
     last_reinforced: int = 0  # Global step when last reinforced
     canonical_id: Optional[str] = None  # If set, this is an alias pointing to canonical concept
     fused_from: List[str] = field(default_factory=list)  # Track concepts that were fused into this one
+    
+    # NEW: 3-Tier Ontology Fields
+    tier: int = TIER_DOMAIN
+    project: str = "default"  # Project/domain namespace
+    origin: str = "kb"  # Origin type: "kb", "runtime", "manual", "system_design"
+    last_mitosis_step: int = -1000  # Last mitosis event step (for cooldown)
+    last_fusion_step: int = -1000  # Last fusion event step (for cooldown)
+
+def is_protected_namespace(name: str) -> bool:
+    """Check if concept name belongs to protected namespace."""
+    protected_prefixes = [
+        "system:",
+        "meta:",
+        "hologram:",
+        "architecture:",
+    ]
+    return any(name.startswith(prefix) for prefix in protected_prefixes)
+
+def can_interact(a: Concept, b: Concept) -> bool:
+    """
+    Check if two concepts can interact (fuse/drift).
+    
+    Rules:
+    - Both must be Tier 1 (Domain)
+    - Both must be from same project
+    - Both must have same origin type
+    """
+    if a.tier != TIER_DOMAIN or b.tier != TIER_DOMAIN:
+        return False
+    if a.project != b.project:
+        return False
+    if a.origin != b.origin:
+        return False
+    return True
 
 
 @dataclass
@@ -320,13 +359,37 @@ class Gravity:
         # Final normalize for new concept
         new.vec /= (np.linalg.norm(new.vec) + 1e-8)
 
-    def check_mitosis(self, name: str, threshold: float = 0.3) -> bool:
+    def check_mitosis(self, name: str, threshold: float = 0.3, 
+                      mass_threshold: float = 2.0, 
+                      cooldown_steps: int = 10) -> bool:
         """
         Check if a concept is under semantic tension and needs splitting.
         Returns True if mitosis occurred.
         """
         with self._lock:
             if name not in self.concepts:
+                return False
+                
+            concept = self.concepts[name]
+            
+            # NEW: Tier validation
+            if concept.tier != TIER_DOMAIN:
+                return False
+            
+            # NEW: Mass threshold
+            if concept.mass < mass_threshold:
+                return False
+            
+            # NEW: Cooldown check
+            if self.global_step - concept.last_mitosis_step < cooldown_steps:
+                return False
+            
+            # NEW: Origin check
+            if concept.origin == "system_design":
+                return False
+            
+            # NEW: Namespace protection
+            if is_protected_namespace(name):
                 return False
                 
             # 1. Gather neighbors
@@ -390,9 +453,18 @@ class Gravity:
             vec2 = centroids[1]
             vec2 /= np.linalg.norm(vec2)
             
-            self.add_concept(name1, vec=vec1, mass=original.mass/2, negation=original.negation)
-            self.add_concept(name2, vec=vec2, mass=original.mass/2, negation=original.negation)
+            # Pass tier/project/origin to siblings
+            self.add_concept(name1, vec=vec1, mass=original.mass/2, negation=original.negation,
+                             tier=original.tier, project=original.project, origin=original.origin)
+            self.add_concept(name2, vec=vec2, mass=original.mass/2, negation=original.negation,
+                             tier=original.tier, project=original.project, origin=original.origin)
             
+            # Update cooldown
+            if name1 in self.concepts:
+                self.concepts[name1].last_mitosis_step = self.global_step
+            if name2 in self.concepts:
+                self.concepts[name2].last_mitosis_step = self.global_step
+
             # Re-link neighbors
             for n in cluster1:
                 old_key = (min(name, n), max(name, n))
@@ -419,7 +491,41 @@ class Gravity:
                 
             return True
 
-    def check_fusion_all(self, base_threshold: float = 0.85):
+    def neighborhood_divergence(self, a_name: str, b_name: str, threshold: float = 0.4) -> float:
+        """
+        Check if two concepts have diverging neighborhoods.
+        Returns divergence score (higher = more divergent).
+        """
+        a_neighbors = set()
+        b_neighbors = set()
+        
+        for (n1, n2), strength in self.relations.items():
+            if strength > 0.3:
+                # Exclude the other concept from neighbors list to focus on shared 3rd parties
+                if n1 == a_name and n2 != b_name:
+                    a_neighbors.add(n2)
+                elif n2 == a_name and n1 != b_name:
+                    a_neighbors.add(n1)
+                
+                if n1 == b_name and n2 != a_name:
+                    b_neighbors.add(n2)
+                elif n2 == b_name and n1 != a_name:
+                    b_neighbors.add(n1)
+        
+        if not a_neighbors or not b_neighbors:
+            return 0.0
+        
+        # Jaccard distance
+        intersection = len(a_neighbors & b_neighbors)
+        union = len(a_neighbors | b_neighbors)
+        
+        if union == 0:
+            return 0.0
+        
+        jaccard = intersection / union
+        return 1.0 - jaccard
+
+    def check_fusion_all(self, base_threshold: float = 0.85, cooldown_steps: int = 10):
         """
         Scan for concepts that are close enough to fuse.
         Uses FAISS for efficiency.
@@ -437,8 +543,14 @@ class Gravity:
         index = faiss.IndexFlatIP(d)
         
         names = list(self.concepts.keys())
-        # Filter out aliases/ghosts
-        active_names = [n for n in names if self.concepts[n].canonical_id is None]
+        # Filter out aliases/ghosts AND check tier constraints
+        active_names = [
+            n for n in names 
+            if (self.concepts[n].canonical_id is None and 
+                self.concepts[n].tier == TIER_DOMAIN and
+                not is_protected_namespace(n) and
+                self.global_step - self.concepts[n].last_fusion_step > cooldown_steps)
+        ]
         
         if len(active_names) < 2:
             return 0
@@ -457,13 +569,30 @@ class Gravity:
             name_a = active_names[i]
             if name_a in processed: continue
             
-            # Check neighbor
-            idx_b = indices[1]
-            if idx_b == -1: continue # Should not happen
+            # Identify neighbor (handle case where self is not first)
+            idx_b = -1
+            sim = 0.0
+            
+            if indices[0] != i:
+                idx_b = indices[0]
+                sim = distances[0]
+            elif indices[1] != i:
+                idx_b = indices[1]
+                sim = distances[1]
+                
+            if idx_b == -1: continue # No valid neighbor found
             
             name_b = active_names[idx_b]
             if name_b in processed: continue
             
+            # NEW: Tier interaction check
+            if not can_interact(self.concepts[name_a], self.concepts[name_b]):
+                continue
+                
+            # NEW: Neighborhood divergence check
+            if self.neighborhood_divergence(name_a, name_b) > 0.6:
+                continue
+
             sim = distances[1]
             
             # 3. Calibrate Threshold based on Mass (Black Hole Effect)
@@ -487,6 +616,11 @@ class Gravity:
                          {"sim": f"{sim:.3f}", "thresh": f"{calibrated_threshold:.3f}", "mass_gain": f"+{self.concepts[variant].mass:.2f}"})
                 
                 self.fuse_concepts(variant, canonical, transfer_mass=True)
+                
+                # Update cooldown
+                if canonical in self.concepts:
+                    self.concepts[canonical].last_fusion_step = self.global_step
+                
                 processed.add(variant)
                 fused_count += 1
                 
@@ -535,6 +669,9 @@ class Gravity:
         with self._lock:
             if variant_name not in self.concepts:
                 return False
+            
+            if variant_name == canonical_name:
+                return False # Prevent self-fusion
             
             if canonical_name not in self.concepts:
                 # If canonical doesn't exist, promote variant to canonical
@@ -631,7 +768,19 @@ class Gravity:
             return False
         return self.concepts[name].canonical_id is not None
 
-    def add_concept(self, name: str, text: Optional[str] = None, vec: Optional[np.ndarray] = None, mass: float = 1.0, negation: Optional[bool] = None, is_glyph: bool = False):
+    def add_concept(
+        self, 
+        name: str, 
+        text: Optional[str] = None, 
+        vec: Optional[np.ndarray] = None, 
+        mass: float = 1.0, 
+        negation: Optional[bool] = None, 
+        is_glyph: bool = False,
+        # NEW parameters
+        tier: int = TIER_DOMAIN,
+        project: str = "default",
+        origin: str = "kb"
+    ):
         with self._lock:
             self.global_step += 1
             
@@ -673,9 +822,18 @@ class Gravity:
                 mass=mass, 
                 count=1, 
                 negation=negation,
-                last_reinforced=self.global_step
+                last_reinforced=self.global_step,
+                # NEW fields
+                tier=tier,
+                project=project,
+                origin=origin,
+                last_mitosis_step=-1000,
+                last_fusion_step=-1000
             )
-            self._mutual_drift(name)
+            
+            # Only apply drift if Tier 1
+            if tier == TIER_DOMAIN:
+                self._mutual_drift(name)
 
     def apply_isolation_decay(self, staleness_threshold: int = 5):
         """Apply decay to unreinforced concepts.
@@ -763,7 +921,13 @@ class Gravity:
                     "negation": c.negation,
                     "last_reinforced": c.last_reinforced,
                     "canonical_id": c.canonical_id,
-                    "fused_from": c.fused_from
+                    "fused_from": c.fused_from,
+                    # NEW fields
+                    "tier": c.tier,
+                    "project": c.project,
+                    "origin": c.origin,
+                    "last_mitosis_step": c.last_mitosis_step,
+                    "last_fusion_step": c.last_fusion_step,
                 }
                 for name, c in self.concepts.items()
             },
@@ -802,6 +966,13 @@ class Gravity:
             # Restore concepts
             self.concepts = {}
             for name, data in state.get("concepts", {}).items():
+                # Migration: default tier=1 for old saves
+                tier = data.get("tier", TIER_DOMAIN)
+                project = data.get("project", "default")
+                origin = data.get("origin", "kb")
+                last_mitosis_step = data.get("last_mitosis_step", -1000)
+                last_fusion_step = data.get("last_fusion_step", -1000)
+
                 self.concepts[name] = Concept(
                     name=name,
                     vec=np.array(data["vec"], dtype=np.float32),
@@ -810,7 +981,12 @@ class Gravity:
                     negation=data.get("negation", False),
                     last_reinforced=data.get("last_reinforced", 0),
                     canonical_id=data.get("canonical_id"),
-                    fused_from=data.get("fused_from", [])
+                    fused_from=data.get("fused_from", []),
+                    tier=tier,
+                    project=project,
+                    origin=origin,
+                    last_mitosis_step=last_mitosis_step,
+                    last_fusion_step=last_fusion_step,
                 )
 
             # Restore relations
@@ -834,10 +1010,24 @@ class GravityField:
         else:
             self.index = None
 
-    def add(self, name: str, vec: np.ndarray):
+    def add(
+        self, 
+        name: str, 
+        vec: np.ndarray, 
+        # NEW parameters
+        tier: int = TIER_DOMAIN,
+        project: str = "default",
+        origin: str = "kb"
+    ):
         vec = vec.astype("float32")
         vec /= (np.linalg.norm(vec) + 1e-8)
-        self.sim.add_concept(name, vec=vec)
+        self.sim.add_concept(
+            name, 
+            vec=vec,
+            tier=tier,
+            project=project,
+            origin=origin
+        )
         self.vectors.append(vec)
         self.names.append(name)
         if self.index is not None:

@@ -17,5 +17,4 @@ EOF
 .env
 data/
 .vscode/
-docs/mg_scorer_implementation.md
-docs/system_status.md
+docs/tracking
