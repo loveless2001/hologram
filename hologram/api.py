@@ -24,7 +24,7 @@ from .embeddings import (
     get_clip_embed_dim,
 )
 from .gravity import GravityField  # ← integrate Memory Gravity
-from .text_utils import extract_concepts
+from .text_utils import extract_concepts, normalize_text
 from .manifold import LatentManifold
 from .retrieval import extract_local_field
 from .retrieval import extract_local_field
@@ -104,6 +104,9 @@ class Hologram:
 
     # --- Write operations ---
     def add_text(self, glyph_id: str, text: str, trace_id: Optional[str] = None, do_extract_concepts: bool = False, **meta):
+        # Normalize text (cleaning + spelling + fuzzy resolution)
+        text, canonical_trace_id = normalize_text(text, store=self.store, encoder=self.text_encoder)
+
         trace_id = trace_id or f"text:{abs(hash(text))%10**10}"
         # Use manifold for alignment
         vec = self.manifold.align_text(text, self.text_encoder)
@@ -113,14 +116,29 @@ class Hologram:
         if self.field:
             self.field.add(trace_id, vec)
             
+            # If fuzzy resolution found a canonical, trigger fusion
+            if canonical_trace_id and canonical_trace_id != trace_id:
+                self.field.sim.fuse_concepts(trace_id, canonical_trace_id, transfer_mass=True)
+            
             if do_extract_concepts:
                 concepts = extract_concepts(text)
                 for concept_text in concepts:
+                    # Normalize concept text too (fuzzy resolve concepts to existing nodes)
+                    concept_text_normalized, concept_canonical_id = normalize_text(
+                        concept_text, store=self.store, encoder=self.text_encoder
+                    )
+                    
                     # Concepts also go through manifold
-                    c_vec = self.manifold.align_text(concept_text, self.text_encoder)
-                    self.field.add(concept_text, vec=c_vec)
-                    if self.field.check_mitosis(concept_text):
-                        print(f"[Gravity] Mitosis occurred for '{concept_text}'")
+                    c_vec = self.manifold.align_text(concept_text_normalized, self.text_encoder)
+                    c_id = f"concept:{abs(hash(concept_text_normalized))%10**10}"
+                    self.field.add(c_id, vec=c_vec)
+                    
+                    # Trigger fusion if needed
+                    if concept_canonical_id and concept_canonical_id != c_id:
+                        self.field.sim.fuse_concepts(c_id, concept_canonical_id, transfer_mass=True)
+            
+            # Trigger dynamic self-regulation (Auto-Fusion & Auto-Mitosis)
+            self.field.sim.step_dynamics()
                         
         return trace_id
 

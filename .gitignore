@@ -18,3 +18,4 @@ EOF
 data/
 .vscode/
 docs/mg_scorer_implementation.md
+docs/system_status.md

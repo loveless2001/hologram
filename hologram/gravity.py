@@ -12,6 +12,26 @@ try:
 except ImportError:
     psutil = None
 
+# --- Streaming Log ---
+def log_event(event_type: str, message: str, details: Dict = None):
+    """Emit a streaming log event."""
+    # ANSI colors
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    RESET = "\033[0m"
+    
+    color = RESET
+    if event_type == "FUSION": color = GREEN
+    elif event_type == "MITOSIS": color = CYAN
+    elif event_type == "GRAVITY": color = YELLOW
+    elif event_type == "ERROR": color = RED
+    
+    print(f"{color}[{event_type}] {message}{RESET}")
+    if details:
+        print(f"{color}      └─ {details}{RESET}")
+
 # --- Utility functions ---
 def hash_embed(text: str, dim: int = 256, seed: int = 13) -> np.ndarray:
     vec = np.zeros(dim, dtype=np.float32)
@@ -122,6 +142,8 @@ class Concept:
     count: int = 1
     negation: bool = False  # True if concept contains negation
     last_reinforced: int = 0  # Global step when last reinforced
+    canonical_id: Optional[str] = None  # If set, this is an alias pointing to canonical concept
+    fused_from: List[str] = field(default_factory=list)  # Track concepts that were fused into this one
 
 
 @dataclass
@@ -298,7 +320,7 @@ class Gravity:
         # Final normalize for new concept
         new.vec /= (np.linalg.norm(new.vec) + 1e-8)
 
-    def check_mitosis(self, name: str, threshold: float = 0.5) -> bool:
+    def check_mitosis(self, name: str, threshold: float = 0.3) -> bool:
         """
         Check if a concept is under semantic tension and needs splitting.
         Returns True if mitosis occurred.
@@ -312,7 +334,8 @@ class Gravity:
             for other_name in self.concepts:
                 if other_name == name: continue
                 key = (min(name, other_name), max(name, other_name))
-                if self.relations.get(key, 0.0) > 0.3: # Strong connection threshold
+                strength = self.relations.get(key, 0.0)
+                if strength > 0.3: # Strong connection threshold
                     neighbors.append(other_name)
             
             if len(neighbors) < 3:
@@ -352,7 +375,8 @@ class Gravity:
                 return False
                 
             # 3. Perform Mitosis
-            print(f"[Mitosis] Splitting '{name}' into '{name}_1' and '{name}_2' (Centroid Dist: {dist:.3f})")
+            log_event("MITOSIS", f"Splitting '{name}'", 
+                     {"centroid_dist": f"{dist:.3f}", "mass": f"{self.concepts[name].mass:.2f}"})
             original = self.concepts[name]
             
             # Create siblings
@@ -394,6 +418,218 @@ class Gravity:
                 del self.relations[k]
                 
             return True
+
+    def check_fusion_all(self, base_threshold: float = 0.85):
+        """
+        Scan for concepts that are close enough to fuse.
+        Uses FAISS for efficiency.
+        
+        Calibration:
+        - Massive concepts act like black holes (lower fusion threshold).
+        - Threshold = Base - (log(Mass) * 0.02)
+        """
+        if len(self.concepts) < 2:
+            return 0
+            
+        # 1. Build temporary index for current state
+        # (Optimization: Maintain a persistent index in Gravity class if scale increases)
+        d = self.dim
+        index = faiss.IndexFlatIP(d)
+        
+        names = list(self.concepts.keys())
+        # Filter out aliases/ghosts
+        active_names = [n for n in names if self.concepts[n].canonical_id is None]
+        
+        if len(active_names) < 2:
+            return 0
+            
+        vecs = np.stack([self.concepts[n].vec for n in active_names]).astype('float32')
+        index.add(vecs)
+        
+        # 2. Search for neighbors
+        # k=2 because nearest is always self
+        D, I = index.search(vecs, 2)
+        
+        fused_count = 0
+        processed = set()
+        
+        for i, (distances, indices) in enumerate(zip(D, I)):
+            name_a = active_names[i]
+            if name_a in processed: continue
+            
+            # Check neighbor
+            idx_b = indices[1]
+            if idx_b == -1: continue # Should not happen
+            
+            name_b = active_names[idx_b]
+            if name_b in processed: continue
+            
+            sim = distances[1]
+            
+            # 3. Calibrate Threshold based on Mass (Black Hole Effect)
+            mass_a = self.concepts[name_a].mass
+            mass_b = self.concepts[name_b].mass
+            max_mass = max(mass_a, mass_b)
+            
+            # Larger mass = stronger pull = lower threshold needed to capture
+            calibrated_threshold = base_threshold - (np.log1p(max_mass) * 0.02)
+            calibrated_threshold = max(0.6, calibrated_threshold) # Safety floor
+            
+            if sim > calibrated_threshold:
+                # Fuse!
+                # Determine canonical (larger mass wins)
+                if mass_a >= mass_b:
+                    canonical, variant = name_a, name_b
+                else:
+                    canonical, variant = name_b, name_a
+                
+                log_event("FUSION", f"'{variant}' absorbed by '{canonical}'", 
+                         {"sim": f"{sim:.3f}", "thresh": f"{calibrated_threshold:.3f}", "mass_gain": f"+{self.concepts[variant].mass:.2f}"})
+                
+                self.fuse_concepts(variant, canonical, transfer_mass=True)
+                processed.add(variant)
+                fused_count += 1
+                
+        return fused_count
+
+    def step_dynamics(self):
+        """
+        Run one step of the dynamic physics simulation.
+        - Auto-Fusion (Gravity)
+        - Auto-Mitosis (Cell Division)
+        """
+        with self._lock:
+            # 1. Fusion (Pull together)
+            n_fused = self.check_fusion_all()
+            
+            # 2. Mitosis (Split apart)
+            # Check random subset or high-tension candidates to save compute
+            # For now, check top 10 massive concepts (most likely to have tension)
+            sorted_concepts = sorted(
+                [n for n, c in self.concepts.items() if c.canonical_id is None], 
+                key=lambda n: self.concepts[n].mass, 
+                reverse=True
+            )[:10]
+            
+            n_split = 0
+            for name in sorted_concepts:
+                if self.check_mitosis(name):
+                    n_split += 1
+            
+            if n_fused > 0 or n_split > 0:
+                log_event("GRAVITY", "System Equilibrium Adjusted", {"fused": n_fused, "split": n_split})
+
+    def fuse_concepts(self, variant_name: str, canonical_name: str, transfer_mass: bool = True):
+        """
+        Fuse (merge) a variant concept into a canonical concept.
+        This is the reverse of mitosis - concept fusion.
+        
+        Args:
+            variant_name: The variant/alias concept to merge
+            canonical_name: The canonical concept to merge into
+            transfer_mass: If True, transfer mass from variant to canonical
+        
+        Returns:
+            True if fusion occurred, False otherwise
+        """
+        with self._lock:
+            if variant_name not in self.concepts:
+                return False
+            
+            if canonical_name not in self.concepts:
+                # If canonical doesn't exist, promote variant to canonical
+                variant = self.concepts[variant_name]
+                variant.name = canonical_name
+                self.concepts[canonical_name] = variant
+                del self.concepts[variant_name]
+                return True
+            
+            variant = self.concepts[variant_name]
+            canonical = self.concepts[canonical_name]
+            
+            print(f"[Fusion] Merging '{variant_name}' → '{canonical_name}' (mass: {variant.mass:.2f} + {canonical.mass:.2f})")
+            
+            # Transfer mass
+            if transfer_mass:
+                canonical.mass += variant.mass
+                canonical.count += variant.count
+            
+            # Track fusion history
+            canonical.fused_from.append(variant_name)
+            
+            # Convert variant to alias (pointer)
+            variant.canonical_id = canonical_name
+            variant.mass = 0.0  # Ghost node, no gravitational pull
+            
+            # Transfer relations
+            for (n1, n2), strength in list(self.relations.items()):
+                if variant_name in (n1, n2):
+                    other_name = n2 if n1 == variant_name else n1
+                    
+                    if other_name == canonical_name:
+                        # Self-reference, remove
+                        del self.relations[(n1, n2)]
+                        continue
+                    
+                    # Create new relation with canonical
+                    new_key = (min(canonical_name, other_name), max(canonical_name, other_name))
+                    
+                    if new_key in self.relations:
+                        # Merge strengths (weighted average)
+                        self.relations[new_key] = (self.relations[new_key] + strength) / 2.0
+                    else:
+                        self.relations[new_key] = strength
+                    
+                    # Remove old relation
+                    del self.relations[(n1, n2)]
+            
+            canonical.last_reinforced = self.global_step
+            
+            return True
+    
+    def resolve_canonical(self, name: str) -> str:
+        """
+        Follow the canonical_id chain to find the true canonical concept.
+        
+        Args:
+            name: Concept name to resolve
+        
+        Returns:
+            Canonical concept name
+        """
+        visited = set()
+        current = name
+        
+        while current in self.concepts:
+            if current in visited:
+                # Circular reference, break
+                return current
+            
+            visited.add(current)
+            concept = self.concepts[current]
+            
+            if concept.canonical_id is None:
+                # Found canonical
+                return current
+            
+            # Follow pointer
+            current = concept.canonical_id
+        
+        return name
+    
+    def is_alias(self, name: str) -> bool:
+        """
+        Check if a concept is an alias (has canonical_id set).
+        
+        Args:
+            name: Concept name to check
+        
+        Returns:
+            True if alias, False if canonical or not found
+        """
+        if name not in self.concepts:
+            return False
+        return self.concepts[name].canonical_id is not None
 
     def add_concept(self, name: str, text: Optional[str] = None, vec: Optional[np.ndarray] = None, mass: float = 1.0, negation: Optional[bool] = None, is_glyph: bool = False):
         with self._lock:
@@ -525,7 +761,9 @@ class Gravity:
                     "mass": c.mass,
                     "count": c.count,
                     "negation": c.negation,
-                    "last_reinforced": c.last_reinforced
+                    "last_reinforced": c.last_reinforced,
+                    "canonical_id": c.canonical_id,
+                    "fused_from": c.fused_from
                 }
                 for name, c in self.concepts.items()
             },
@@ -570,7 +808,9 @@ class Gravity:
                     mass=data["mass"],
                     count=data["count"],
                     negation=data.get("negation", False),
-                    last_reinforced=data.get("last_reinforced", 0)
+                    last_reinforced=data.get("last_reinforced", 0),
+                    canonical_id=data.get("canonical_id"),
+                    fused_from=data.get("fused_from", [])
                 )
 
             # Restore relations
