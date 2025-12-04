@@ -4,7 +4,7 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 
 ---
 
-## ✨ Latest Features (Nov 2023)
+## ✨ Latest Features (Dec 2023)
 
 ### 🔬 GLiNER-Powered Concept Decomposition
 - **Automatic sentence → atomic concepts**: Full sentences are decomposed into semantic units using GLiNER (Generalist Named Entity Recognition)
@@ -58,11 +58,15 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 - **Suggestions**: Auto-recommends split/fuse/stabilize actions
 - **Presets**: Analytical, creative, conservative configurations
 
-### ⚙️ Centralized Configuration (New!)
+### ⚙️ Global Configuration System (New!)
+- **Persistent storage**: Configuration saved to `~/.hologram_memory/_hologram_system/memory.db`
 - **Single source**: `hologram/config.py` for all system parameters
 - **Environment overrides**: `HOLOGRAM_USE_GPU`, `HOLOGRAM_PORT`, `HOLOGRAM_MEMORY_DIR`
-- **Optimal defaults**: Auto-detects GPU, uses MiniLM embeddings, SQLite storage
-- **Easy tuning**: Modify thresholds, model names, server settings in one place
+- **Auto-sync**: Server loads global config on startup, env vars still override
+- **CLI tool**: `scripts/setup_hologram.py` for initialization and conflict resolution
+- **Config hierarchy**: `Environment Variables > Global Config > Defaults`
+- **Interactive setup**: Prompts for conflict resolution when local and global differ
+- **System-managed**: Global project marked as read-only for safety
 
 ---
 
@@ -86,6 +90,7 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 - `embeddings.py` – MiniLM, CLIP, and hashing encoders
 - `text_utils.py` – GLiNER-based concept extraction
 - `config.py` – **centralized configuration** (NEW)
+- `global_config.py` – **global config persistence & sync** (NEW)
 - `cost_engine.py` – **diagnostic metrics** (NEW)
 - `manifold.py` – vector space alignment
 - `retrieval.py` – probe-based dynamic retrieval
@@ -100,6 +105,7 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 ### Demos & Scripts
 - `demo.py`, `demo_clip.py`, `demo_img2img.py` – runnable examples
 - `scripts/seed_relativity.py` – generates test KB with Special Relativity concepts
+- `scripts/setup_hologram.py` – **global configuration management** (NEW)
 
 ### Tests
 - `tests/test_chatbot.py` – regression coverage for chat + persistence
@@ -194,7 +200,39 @@ Then:
 1. Use REST API at `http://localhost:8000`
 2. Or start Streamlit UI: `streamlit run web_ui.py`
 
-### 4. Visualization
+### 4. Configuration Management
+
+```bash
+# Initialize global configuration (first-time setup)
+python scripts/setup_hologram.py --init
+
+# View current configuration
+python scripts/setup_hologram.py --show    # Local config
+python scripts/setup_hologram.py --global  # Global config
+
+# Auto-sync (for scripts/automation)
+python scripts/setup_hologram.py --sync
+
+# Interactive mode (prompts for conflict resolution)
+python scripts/setup_hologram.py
+```
+
+**Configuration Priority:**
+```
+Environment Variables > Global Config > Defaults
+```
+
+**Example: Override settings**
+```bash
+# Temporary override (this session only)
+HOLOGRAM_PORT=9000 python -m hologram.server
+
+# Permanent override (update global config)
+python scripts/setup_hologram.py --init  # Updates global DB
+```
+
+
+### 5. Visualization
 
 Visit `http://localhost:8000/viz/viz.html` after loading a KB to see the 2D concept projection.
 

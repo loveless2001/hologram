@@ -31,8 +31,22 @@ app.add_middleware(
 # Global Hologram instances per project
 hologram_instances: Dict[str, Hologram] = {}
 
-# Default memory directory
+# Load global configuration if available
 from .config import Config
+from .global_config import global_project_exists, apply_global_config, SyncStatus, sync_config
+
+# Apply global config on startup (env vars still override)
+if global_project_exists():
+    status, diff = sync_config()
+    if status == SyncStatus.SYNCED:
+        print("[Server] Global config loaded (synchronized)")
+    elif status == SyncStatus.CONFLICT:
+        print(f"[Server] Config conflict detected ({len(diff)} differences)")
+        print("[Server] Applying global config (env vars still override)")
+        apply_global_config(apply_env_overrides=True)
+else:
+    print("[Server] No global config found, using defaults")
+
 MEMORY_DIR = Path(Config.storage.MEMORY_DIR)
 MEMORY_DIR.mkdir(exist_ok=True)
 

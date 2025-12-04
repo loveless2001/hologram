@@ -9,6 +9,10 @@ cleanup() {
 
 trap cleanup SIGINT
 
+# Initialize/sync global config
+echo "Checking global configuration..."
+./.venv/bin/python scripts/setup_hologram.py --sync
+
 # Start Hologram Server
 echo "Starting Hologram Server..."
 ./.venv/bin/python -m hologram.server &

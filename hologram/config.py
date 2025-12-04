@@ -1,6 +1,6 @@
 import os
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass, field, fields, asdict
+from typing import Optional, Dict, Any
 
 @dataclass
 class CoreConfig:
@@ -19,6 +19,9 @@ class StorageConfig:
     # SQLite settings
     USE_SQLITE: bool = True
     SQLITE_DB_NAME: str = "memory.db"
+    
+    # Global project name
+    GLOBAL_PROJECT: str = "_hologram_system"
 
 @dataclass
 class ServerConfig:
@@ -52,13 +55,98 @@ class EmbeddingConfig:
     # Device
     DEVICE: str = "cuda" if os.getenv("HOLOGRAM_FORCE_CPU", "0") != "1" else "cpu"
 
+
 class Config:
+    """Centralized configuration with persistence support."""
     core = CoreConfig()
     storage = StorageConfig()
     server = ServerConfig()
     gravity = GravityConfig()
     embedding = EmbeddingConfig()
+    
+    # Track if loaded from global config
+    _loaded_from_global: bool = False
+    
+    @classmethod
+    def to_dict(cls) -> Dict[str, Any]:
+        """Serialize all config sections to a flat dictionary."""
+        result = {}
+        for section_name in ["core", "storage", "server", "gravity", "embedding"]:
+            section = getattr(cls, section_name)
+            for f in fields(section):
+                key = f"{section_name}.{f.name}"
+                result[key] = getattr(section, f.name)
+        return result
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any], apply_env_overrides: bool = True):
+        """
+        Update config from a flat dictionary.
+        If apply_env_overrides is True, environment variables take precedence.
+        """
+        sections = {
+            "core": cls.core,
+            "storage": cls.storage,
+            "server": cls.server,
+            "gravity": cls.gravity,
+            "embedding": cls.embedding,
+        }
+        
+        for key, value in data.items():
+            if "." not in key:
+                continue
+            section_name, field_name = key.split(".", 1)
+            if section_name not in sections:
+                continue
+            section = sections[section_name]
+            if not hasattr(section, field_name):
+                continue
+            
+            # Check if env var override exists
+            env_key = f"HOLOGRAM_{field_name}"
+            if apply_env_overrides and env_key in os.environ:
+                continue  # Skip, env var takes precedence
+            
+            # Type conversion
+            current_value = getattr(section, field_name)
+            if isinstance(current_value, bool):
+                value = str(value).lower() in ("1", "true", "yes")
+            elif isinstance(current_value, int):
+                value = int(value)
+            elif isinstance(current_value, float):
+                value = float(value)
+            
+            setattr(section, field_name, value)
+        
+        cls._loaded_from_global = True
+    
+    @classmethod
+    def diff(cls, other_dict: Dict[str, Any]) -> Dict[str, tuple]:
+        """
+        Compare current config with another dict.
+        Returns dict of {key: (current_value, other_value)} for differences.
+        """
+        current = cls.to_dict()
+        differences = {}
+        all_keys = set(current.keys()) | set(other_dict.keys())
+        for key in all_keys:
+            curr_val = current.get(key)
+            other_val = other_dict.get(key)
+            if curr_val != other_val:
+                differences[key] = (curr_val, other_val)
+        return differences
+    
+    @classmethod
+    def get_global_db_path(cls) -> str:
+        """Get the path to the global config database."""
+        return os.path.join(
+            cls.storage.MEMORY_DIR,
+            cls.storage.GLOBAL_PROJECT,
+            cls.storage.SQLITE_DB_NAME
+        )
+
 
 # Backwards compatibility for existing imports
 VECTOR_DIM = Config.core.VECTOR_DIM
 SEED = Config.core.SEED
+
