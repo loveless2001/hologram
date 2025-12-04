@@ -44,12 +44,25 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 - **Interactive**: Hover tooltips, zoom/pan, auto-refresh
 - **Human-readable labels**: Shows actual text content instead of hash IDs
 
-### 🧲 MG Scorer: Semantic Quality Metrics (New!)
+### 🧲 MG Scorer: Semantic Quality Metrics
 - **Coherence**: Measure how tightly clustered text vectors are (0-1 scale)
 - **Curvature**: Detect semantic drift and topic shifts in ordered sequences
 - **Entropy**: Quantify semantic dispersion across principal components
 - **Collapse Risk**: Early warning system for hallucinations and contradictions
 - **Use cases**: LLM output validation, memory health monitoring, retrieval quality gates
+
+### 💰 Cost Engine: Diagnostic Meta-Layer (New!)
+- **Resistance**: Measures integration difficulty for new concepts
+- **Entropy**: Quantifies neighborhood disorder (cognitive load)
+- **Drift Cost**: Tracks semantic field instability over time
+- **Suggestions**: Auto-recommends split/fuse/stabilize actions
+- **Presets**: Analytical, creative, conservative configurations
+
+### ⚙️ Centralized Configuration (New!)
+- **Single source**: `hologram/config.py` for all system parameters
+- **Environment overrides**: `HOLOGRAM_USE_GPU`, `HOLOGRAM_PORT`, `HOLOGRAM_MEMORY_DIR`
+- **Optimal defaults**: Auto-detects GPU, uses MiniLM embeddings, SQLite storage
+- **Easy tuning**: Modify thresholds, model names, server settings in one place
 
 ---
 
@@ -67,19 +80,18 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 
 ### Core Package (`hologram/`)
 - `api.py` – public `Hologram` API (`add_text`, `add_image_path`, search, persistence)
+- `server.py` – **FastAPI server** with REST endpoints for VSCode extension
 - `chatbot.py` – chat memory, provider abstractions, CLI orchestration helpers
-- `gravity.py` – concept drift simulation and FAISS-backed `GravityField` (supports state export/import)
-- `embeddings.py` – hashing encoders and CLIP wrappers (text and image)
-- **`text_utils.py`** – GLiNER-based concept extraction with relation/verb detection
-
-### API Server (`api_server/`)
-- `main.py` – FastAPI service with multiple endpoints:
-  - `/chat` – conversational interface
-  - `/search` – semantic search for keywords
-  - `/viz-data` – 2D projection data for visualization
-  - `/kbs` – knowledge base management (list, upload, delete)
-- `static/viz.html` – D3.js concept visualization
-- `static/search.html` – standalone semantic search UI
+- `gravity.py` – concept drift simulation and FAISS-backed `GravityField`
+- `embeddings.py` – MiniLM, CLIP, and hashing encoders
+- `text_utils.py` – GLiNER-based concept extraction
+- `config.py` – **centralized configuration** (NEW)
+- `cost_engine.py` – **diagnostic metrics** (NEW)
+- `manifold.py` – vector space alignment
+- `retrieval.py` – probe-based dynamic retrieval
+- `smi.py` – Symbolic Memory Interface
+- `mg_scorer.py` – semantic quality metrics
+- `storage/` – SQLite backend for scalable persistence
 
 ### Command-Line Tools
 - `chat_cli.py` – command-line chat demo with cross-session context
@@ -168,21 +180,19 @@ concepts = extract_concepts(text)
 # Returns: ['Special Relativity', 'time dilation', 'speed of light']
 ```
 
-### 3. Streamlit UI
+### 3. Start Server
 
 ```bash
-# Start API server
-uvicorn api_server.main:app --port 8000
+# Start Hologram server (default: localhost:8000)
+python -m hologram.server
 
-# In another terminal, start Streamlit UI
-streamlit run web_ui.py
+# Or with custom settings
+HOLOGRAM_PORT=9000 HOLOGRAM_USE_GPU=0 python -m hologram.server
 ```
 
 Then:
-1. Select `relativity.txt` in sidebar
-2. Click **🔄 Load KB**
-3. Use **🔍 Semantic Search** tab to search for keywords
-4. Or use **💬 Chat** tab for conversational queries
+1. Use REST API at `http://localhost:8000`
+2. Or start Streamlit UI: `streamlit run web_ui.py`
 
 ### 4. Visualization
 
@@ -296,16 +306,18 @@ Tests cover:
 ```
 hologram/            Core package
   ├── api.py         Hologram API (add_text, search, persistence)
+  ├── server.py      FastAPI server (REST endpoints)
   ├── chatbot.py     Chat memory and provider abstractions
   ├── gravity.py     Gravity field simulation (concept drift)
-  ├── embeddings.py  Text/image encoders (hash + CLIP)
-  └── text_utils.py  GLiNER-based concept extraction
-
-api_server/          FastAPI service
-  ├── main.py        REST API (/search, /chat, /viz-data, /kbs)
-  └── static/        
-      ├── viz.html   D3.js concept visualization
-      └── search.html Standalone search interface
+  ├── embeddings.py  Text/image encoders (MiniLM, CLIP, hash)
+  ├── text_utils.py  GLiNER-based concept extraction
+  ├── config.py      Centralized configuration (NEW)
+  ├── cost_engine.py Diagnostic metrics (NEW)
+  ├── manifold.py    Vector space alignment
+  ├── retrieval.py   Probe-based retrieval
+  ├── smi.py         Symbolic Memory Interface
+  ├── mg_scorer.py   Semantic quality metrics
+  └── storage/       SQLite backend
 
 demos/               Demonstration scripts
   ├── demo.py        Text-only walkthrough

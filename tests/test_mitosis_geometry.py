@@ -35,7 +35,7 @@ def test_geometry_based_mitosis():
     # Add "bank" in the middle (average of both)
     bank_vec = (finance_centroid + river_centroid) / 2.0
     bank_vec /= np.linalg.norm(bank_vec)
-    g.add_concept("bank", vec=bank_vec)
+    g.add_concept("bank", vec=bank_vec, mass=2.5)  # Ensure mass > threshold (2.0)
     
     # Create strong relations to both clusters to simulate tension
     for w in finance_words + river_words:

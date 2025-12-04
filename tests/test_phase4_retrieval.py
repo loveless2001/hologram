@@ -26,7 +26,7 @@ def test_probe_physics():
     print(f"Start Similarity: {dist_start:.3f}")
     
     # Step simulation
-    probe.step(g, step_size=0.2)
+    probe.step(g, step_size=0.01)  # Small step to avoid overshoot with high mass
     
     # Check if moved closer
     dist_end = cosine(probe.pos, target_vec)

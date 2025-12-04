@@ -109,7 +109,7 @@ def test_phase123_integration_full_pipeline():
     # Target: Field (middle)
     field_vec = (c1 + c2) / 2.0
     field_vec /= np.linalg.norm(field_vec)
-    gravity.add_concept("field", vec=field_vec)
+    gravity.add_concept("field", vec=field_vec, mass=2.5)  # Ensure mass > threshold (2.0)
     
     # Neighbors
     for w in ["magnetic", "electric", "force", "charge", "flux", "current", "voltage", "power"]:

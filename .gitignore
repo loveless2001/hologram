@@ -18,3 +18,4 @@ EOF
 data/
 .vscode/
 docs/tracking
+vscode_extension/

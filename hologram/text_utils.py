@@ -152,8 +152,9 @@ def normalize_text(text: str, store: Any = None, encoder: Any = None) -> tuple[s
 
 
 class ConceptExtractor:
-    def __init__(self, model_name: str = "urchade/gliner_medium-v2.1"):
-        self.model_name = model_name
+    def __init__(self, model_name: str = None):
+        from .config import Config
+        self.model_name = model_name or Config.embedding.GLINER_MODEL
         self.model = None
         # Broad set of labels to capture various types of concepts and relations
         self.labels = list(set([

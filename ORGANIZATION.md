@@ -1,16 +1,20 @@
-# Directory Organization - Nov 23, 2023
+# Directory Organization
 
-## Summary of Changes
+## Latest Update (Dec 2025)
 
-The project has been reorganized for better clarity and maintainability.
+### Architecture Consolidation
+- **Removed**: Legacy `api_server/` directory
+- **Added**: `hologram/config.py` for centralized configuration
+- **Added**: `hologram/cost_engine.py` for diagnostic metrics
+- **Consolidated**: Single server at `hologram/server.py`
 
-## New Structure
+## Current Structure
 
-### Root Directory (Clean!)
+### Root Directory
 Now contains only:
 - **Core scripts**: `chat_cli.py`, `web_ui.py`, `run_ui.sh`
 - **Documentation**: `README.md`, `QUICKREF.md`, `RELATIONS.md`
-- **Directories**: `hologram/`, `api_server/`, `demos/`, `tests/`, `scripts/`, `data/`, `docs/`
+- **Directories**: `hologram/`, `demos/`, `tests/`, `scripts/`, `data/`, `docs/`, `vscode_extension/`
 
 ### `/demos` Directory
 **Purpose**: Demonstration scripts showcasing features
@@ -132,10 +136,10 @@ python tests/test_search_relations.py
 ---
 
 **Status**: ✅ Complete
-**Date**: 2023-11-26
-**Impact**: Low (documentation only, no code changes needed)
+**Date**: 2025-12-05
+**Impact**: Medium (removed legacy server, added config system)
 
-## Update (Nov 26, 2023)
-- **Refactoring**: Moved concept logic from `ChatMemory` to `Hologram` and `GravityField`.
-- **New Features**: Added **Concept Mitosis** (contextual disambiguation) and **Graph-Based Reconstruction**.
-- **Impact**: `ChatMemory` is thinner; core logic is now universal for all text inputs.
+## Update History
+- **Dec 5, 2025**: Removed `api_server/`, added `hologram/config.py` and `hologram/cost_engine.py`
+- **Nov 26, 2023**: Refactored concept logic, added Mitosis and Graph-Based Reconstruction
+

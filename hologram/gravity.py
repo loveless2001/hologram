@@ -156,6 +156,9 @@ class Concept:
     origin: str = "kb"  # Origin type: "kb", "runtime", "manual", "system_design"
     last_mitosis_step: int = -1000  # Last mitosis event step (for cooldown)
     last_fusion_step: int = -1000  # Last fusion event step (for cooldown)
+    
+    # Cost Engine: Track previous vector for drift calculation
+    previous_vec: Optional[np.ndarray] = None
 
 def is_protected_namespace(name: str) -> bool:
     """Check if concept name belongs to protected namespace."""
@@ -359,13 +362,17 @@ class Gravity:
         # Final normalize for new concept
         new.vec /= (np.linalg.norm(new.vec) + 1e-8)
 
-    def check_mitosis(self, name: str, threshold: float = 0.3, 
-                      mass_threshold: float = 2.0, 
-                      cooldown_steps: int = 10) -> bool:
+    def check_mitosis(self, name: str, threshold: float = None, 
+                      mass_threshold: float = None, 
+                      cooldown_steps: int = None) -> bool:
         """
         Check if a concept is under semantic tension and needs splitting.
         Returns True if mitosis occurred.
         """
+        from .config import Config
+        if threshold is None: threshold = Config.gravity.MITOSIS_THRESHOLD
+        if mass_threshold is None: mass_threshold = Config.gravity.MITOSIS_MASS_THRESHOLD
+        if cooldown_steps is None: cooldown_steps = Config.gravity.COOLDOWN_STEPS
         with self._lock:
             if name not in self.concepts:
                 return False
@@ -792,11 +799,13 @@ class Gravity:
                 if is_glyph:
                     # Glyphs are defined by their current centroid; overwrite
                     if vec is not None:
+                        c.previous_vec = c.vec.copy()  # Track for drift cost
                         c.vec = vec / (np.linalg.norm(vec) + 1e-8)
                     c.mass = mass
                 else:
                     # Regular concept: blend in new vector + mass
                     if vec is not None:
+                        c.previous_vec = c.vec.copy()  # Track for drift cost
                         v = vec / (np.linalg.norm(vec) + 1e-8)
                         total_mass = c.mass + mass
                         c.vec = (c.vec * c.mass + v * mass) / total_mass

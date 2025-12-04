@@ -3,8 +3,8 @@
 ## 🚀 Getting Started (30 seconds)
 
 ```bash
-# 1. Start API Server
-uvicorn api_server.main:app --port 8000
+# 1. Start Hologram Server
+python -m hologram.server
 
 # 2. Start Streamlit UI (in another terminal)
 streamlit run web_ui.py
@@ -59,10 +59,20 @@ streamlit run web_ui.py
 - [x] **Bridge Links**: Preserves metaphorical connections between split concepts
 - [x] **Dynamic Graph Evolution**: Memory adapts to new domains automatically
 
-#### Phase 4: Dynamic Graph Retrieval (New!)
+#### Phase 4: Dynamic Graph Retrieval
 - [x] **Probe Dynamics**: Physics-aware retrieval trajectory
 - [x] **SMI**: Structured Memory Packet for LLM
 - [x] **Hallucination Control**: LLM restricted to field data
+
+#### Cost Engine (New!)
+- [x] **Diagnostic Metrics**: Resistance, Entropy, Drift Cost
+- [x] **Suggestions**: Split, fuse, stabilize, no-action
+- [x] **Configurable Presets**: Analytical, creative, conservative
+
+#### Configuration System (New!)
+- [x] **Centralized Config**: `hologram/config.py`
+- [x] **Environment Overrides**: `HOLOGRAM_USE_GPU`, `HOLOGRAM_PORT`, etc.
+- [x] **Optimal Defaults**: Auto-detects GPU, uses MiniLM embeddings
 
 ---
 
@@ -240,5 +250,5 @@ curl -s "http://localhost:8000/viz-data" | jq '.points | length'
 
 ---
 
-**Last Updated**: 2025-11-27  
-**System Version**: Hologram v1.0 (Phase 4: Dynamic Graph Retrieval)
+**Last Updated**: 2025-12-05  
+**System Version**: Hologram v1.3 (Cost Engine + Centralized Config)

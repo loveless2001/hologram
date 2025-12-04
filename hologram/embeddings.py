@@ -83,10 +83,14 @@ class ImageCLIP:
         self,
         model: Optional[Any] = None,
         preprocess: Optional[Any] = None,
-        model_name: str = "ViT-B-32",
-        pretrained: str = "laion2b_s34b_b79k",
+        model_name: str = None,
+        pretrained: str = None,
         device: Optional[str] = None,
     ):
+        from .config import Config
+        model_name = model_name or Config.embedding.CLIP_MODEL
+        pretrained = pretrained or Config.embedding.CLIP_PRETRAINED
+        device = device or Config.embedding.DEVICE
         if torch is None or open_clip is None:
             raise RuntimeError(
                 "open_clip and torch are required for CLIP-based image encoding. "
@@ -125,6 +129,8 @@ class TextCLIP:
     Text encoder using the SAME OpenCLIP model as ImageCLIP.
     """
     def __init__(self, model: Any, device: Optional[str] = None):
+        from .config import Config
+        device = device or Config.embedding.DEVICE
         if torch is None:
             raise RuntimeError(
                 "torch is required for CLIP-based text encoding. Install torch or "
@@ -149,7 +155,9 @@ class TextCLIP:
 
 
 class TextMiniLM:
-    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = None):
+        from .config import Config
+        model_name = model_name or Config.embedding.MINILM_MODEL
         if SentenceTransformer is None:
             raise RuntimeError(
                 "sentence-transformers is required for MiniLM encoding. "

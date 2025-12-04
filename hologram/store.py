@@ -34,9 +34,14 @@ class Glyph:
 import faiss
 
 class VectorIndex:
-    def __init__(self, dim: int, use_gpu: bool = True):
+    def __init__(self, dim: int, use_gpu: bool = None):
         self.dim = dim
         self._lock = threading.RLock()  # Thread safety
+
+        # Use config if not explicitly provided
+        from .config import Config
+        if use_gpu is None:
+            use_gpu = Config.storage.USE_GPU
 
         # Try GPU first if requested
         self.use_gpu = False
@@ -97,7 +102,7 @@ class MemoryStore:
         self.vec_dim = vec_dim
         self.traces = {}
         self.glyphs = {}
-        self.index = VectorIndex(vec_dim, use_gpu=True)
+        self.index = VectorIndex(vec_dim, use_gpu=None)
         self.sim = Gravity(dim=vec_dim)
         self.backend = backend
 

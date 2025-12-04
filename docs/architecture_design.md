@@ -330,3 +330,5 @@ But the core principle remains:
 | **1.0.0** | 2025-11-27 | **Research Upgrade**: LatentManifold, Geometry-Based Mitosis (FAISS), Glyph Physics, SMI. |
 | **1.1.0** | 2025-12-01 | **Performance Upgrade**: MiniLM Embeddings, SQLite Storage, Vectorized Gravity, PCA Caching. |
 | **1.2.0** | 2025-12-02 | **Quality Metrics**: MG Scorer module for semantic field health monitoring and collapse detection. |
+| **1.3.0** | 2025-12-05 | **Cost Engine \u0026 Config**: Diagnostic meta-layer (Resistance/Entropy/Drift), centralized configuration system, removed legacy `api_server/`. |
+

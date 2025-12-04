@@ -105,8 +105,10 @@ def test_auto_mitosis():
     
     # 1. Create polysemous concept "Bank"
     print("Adding 'Bank'...")
-    h.add_text("bank", "Bank")
-    bank_id = list(h.field.sim.concepts.keys())[0]
+    print("Adding 'Bank'...")
+    bank_id = h.add_text("bank", "Bank")
+    # Boost mass to satisfy mitosis threshold (2.0)
+    h.field.sim.concepts[bank_id].mass = 2.5
     
     # 2. Add conflicting neighbors
     print("Adding River context...")

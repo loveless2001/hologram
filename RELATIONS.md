@@ -57,10 +57,14 @@ The `/search` endpoint now:
 
 ### Via API
 ```bash
-curl -X POST "http://localhost:8000/search" \
+# Using new hologram.server
+curl -X POST "http://localhost:8000/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "speed of light", "top_k": 5}'
+  -d '{\"project\": \"my_project\", \"text\": \"speed of light\", \"top_k\": 5}'
 ```
+
+**Note**: The new `hologram.server` uses `/query` endpoint instead of `/search`.
+See `hologram/server.py` for full API documentation.
 
 ### Via Streamlit UI
 1. Load a KB (e.g., `relativity.txt`)
