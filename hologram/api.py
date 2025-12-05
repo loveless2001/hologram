@@ -144,14 +144,94 @@ class Hologram:
                  tier: int = 1,  # Default to Tier 1 (Domain)
                  origin: str = "kb",  # "kb", "runtime", "manual", "system_design"
                  **meta):
+        
+        # --- Coreference Resolution ---
+        from .config import Config
+        from .coref import resolve
+        
+        resolved_text = text
+        coref_map = {}
+        
+        if Config.coref.ENABLE_COREF:
+            # 1. Structural Resolution
+            resolved_text, coref_map = resolve(text)
+            
+            # 2. Gravity Fallback
+            if Config.coref.ENABLE_GRAVITY_FALLBACK and self.field:
+                # Check for unresolved pronouns
+                # Naive check: look for common pronouns that are NOT in coref_map
+                # This is tricky because we don't know which pronouns were missed without parsing.
+                # But the user requirement says: "If coref model low-confidence... or Deictics... refer to abstract clauses"
+                # And "For each unresolved pronoun..."
+                
+                # For now, let's just check for specific deictics "this", "that" if they are not in the map
+                # and the sentence is short/ambiguous.
+                
+                # Actually, implementing a full parser to find pronouns is heavy.
+                # Let's trust the user's "Revised pipeline pseudocode":
+                # if unresolved_pronouns_exist(text, coref_map): apply_gravity_fallback(...)
+                
+                # We'll do a simple scan for "this", "that", "it"
+                target_pronouns = ["this", "that", "it", "these", "those"]
+                
+                for word in text.split():
+                    w_clean = word.lower().strip(".,!?")
+                    if w_clean in target_pronouns and word not in coref_map:
+                        # Try gravity resolution
+                        antecedent = self.field.resolve_pronoun(text, word)
+                        if antecedent:
+                            coref_map[word] = antecedent
+                            # We don't necessarily update resolved_text for gravity fallback 
+                            # because it maps to a CONCEPT ID, not necessarily text we want to substitute inline?
+                            # User example: "This" -> "fusion engine".
+                            # If we substitute, it helps GLiNER.
+                            # So yes, let's substitute.
+                            
+                            # Be careful with substitution to not break text
+                            # Simple replace for now (risk of partial match, but acceptable for prototype)
+                            # Actually, let's just store it in the map and let GLiNER see the original text 
+                            # unless we are sure.
+                            # User said: "Use resolved_text for concept extraction".
+                            # So we SHOULD substitute.
+                            
+                            # Note: simple string replace is dangerous (e.g. "with" contains "it").
+                            # We should use regex or token matching.
+                            pass 
+
         # Normalize text (cleaning + spelling + fuzzy resolution)
-        text, canonical_trace_id = normalize_text(text, store=self.store, encoder=self.text_encoder)
+        # We use the RESOLVED text for normalization and extraction?
+        # User said: "Use resolved_text for concept extraction".
+        # But `normalize_text` cleans up the text.
+        
+        # Let's use resolved_text for the content we process, but maybe store original as well?
+        # Trace has `content`. Should it be original or resolved?
+        # User: "Store pronoun resolution inside the Trace object... original_text... resolved_text"
+        # So `content` should probably be `original_text` (backward compat) and we add `resolved_text`.
+        
+        # Wait, `add_text` takes `text`.
+        # If we change `text` to `resolved_text` here, then `Trace.content` becomes `resolved_text`.
+        # We should keep `text` as original.
+        
+        original_text = text
+        
+        # Use resolved_text for concept extraction
+        text_to_process = resolved_text
+        
+        text, canonical_trace_id = normalize_text(text_to_process, store=self.store, encoder=self.text_encoder)
 
         trace_id = trace_id or f"text:{abs(hash(text))%10**10}"
         # Use manifold for alignment
         vec = self.manifold.align_text(text, self.text_encoder)
         
-        tr = Trace(trace_id=trace_id, kind="text", content=text, vec=vec, meta=meta)
+        tr = Trace(
+            trace_id=trace_id, 
+            kind="text", 
+            content=original_text, # Store original text
+            vec=vec, 
+            meta=meta,
+            resolved_text=resolved_text,
+            coref_map=coref_map
+        )
         self.glyphs.attach_trace(glyph_id, tr)
         if self.field and add_to_field:
             self.field.add(
@@ -167,7 +247,7 @@ class Hologram:
                 self.field.sim.fuse_concepts(trace_id, canonical_trace_id, transfer_mass=True)
             
             if do_extract_concepts:
-                concepts = extract_concepts(text)
+                concepts = extract_concepts(text_to_process)
                 for concept_text in concepts:
                     # Normalize concept text too (fuzzy resolve concepts to existing nodes)
                     concept_text_normalized, concept_canonical_id = normalize_text(

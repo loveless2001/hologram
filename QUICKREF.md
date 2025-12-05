@@ -29,6 +29,7 @@ streamlit run web_ui.py
 - [x] **JSON persistence** with gravity state
 
 #### Concept Processing
+- [x] **Coreference Resolution** (hybrid FastCoref + Gravity fallback)
 - [x] **GLiNER-based decomposition** (sentences → atomic concepts)
 - [x] **Relation extraction** (verbs, actions, interactions)
 - [x] **Order preservation** (maintains Subject→Verb→Object flow)
@@ -251,4 +252,4 @@ curl -s "http://localhost:8000/viz-data" | jq '.points | length'
 ---
 
 **Last Updated**: 2025-12-05  
-**System Version**: Hologram v1.3 (Cost Engine + Centralized Config)
+**System Version**: Hologram v1.4 (Coreference Resolution)

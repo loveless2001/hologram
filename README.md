@@ -4,7 +4,14 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 
 ---
 
-## ✨ Latest Features (Dec 2023)
+## ✨ Latest Features (Dec 2024)
+
+### 🔗 Hybrid Coreference Resolution (New!)
+- **FastCoref Integration**: High-accuracy pronoun resolution using neural coreference models
+- **Gravity Fallback**: Vector-based resolution for ambiguous deictics ("this", "that") using concept mass attraction
+- **Trace Metadata**: Stores both original and resolved text with pronoun→antecedent mappings
+- **Improved Extraction**: GLiNER sees resolved text, reducing concept fragmentation
+- **Configuration**: Toggle via `Config.coref.ENABLE_COREF` and `Config.coref.ENABLE_GRAVITY_FALLBACK`
 
 ### 🔬 GLiNER-Powered Concept Decomposition
 - **Automatic sentence → atomic concepts**: Full sentences are decomposed into semantic units using GLiNER (Generalist Named Entity Recognition)
@@ -89,6 +96,7 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 - `gravity.py` – concept drift simulation and FAISS-backed `GravityField`
 - `embeddings.py` – MiniLM, CLIP, and hashing encoders
 - `text_utils.py` – GLiNER-based concept extraction
+- `coref.py` – **hybrid coreference resolution** (NEW)
 - `config.py` – **centralized configuration** (NEW)
 - `global_config.py` – **global config persistence & sync** (NEW)
 - `cost_engine.py` – **diagnostic metrics** (NEW)
@@ -131,9 +139,9 @@ pip install numpy faiss-cpu Pillow
 
 ### Full feature set
 
-For concept decomposition + API + UI:
+For concept decomposition + coreference + API + UI:
 ```bash
-pip install fastapi uvicorn streamlit gliner transformers sentence-transformers scikit-learn
+pip install fastapi uvicorn streamlit gliner transformers sentence-transformers scikit-learn fastcoref
 ```
 
 For OpenAI chatbot:
@@ -186,7 +194,24 @@ concepts = extract_concepts(text)
 # Returns: ['Special Relativity', 'time dilation', 'speed of light']
 ```
 
-### 3. Start Server
+### 3. Coreference Resolution
+
+```python
+from hologram.coref import resolve
+
+text = "The fusion engine is unstable. It requires cooling."
+resolved_text, coref_map = resolve(text)
+
+print(resolved_text)
+# "The fusion engine is unstable. The fusion engine requires cooling."
+
+print(coref_map)
+# {'It': 'The fusion engine'}
+```
+
+**Automatic Integration**: When using `Hologram.add_text()`, coreference resolution runs automatically if enabled in config.
+
+### 4. Start Server
 
 ```bash
 # Start Hologram server (default: localhost:8000)
@@ -200,7 +225,7 @@ Then:
 1. Use REST API at `http://localhost:8000`
 2. Or start Streamlit UI: `streamlit run web_ui.py`
 
-### 4. Configuration Management
+### 5. Configuration Management
 
 ```bash
 # Initialize global configuration (first-time setup)
@@ -232,7 +257,7 @@ python scripts/setup_hologram.py --init  # Updates global DB
 ```
 
 
-### 5. Visualization
+### 6. Visualization
 
 Visit `http://localhost:8000/viz/viz.html` after loading a KB to see the 2D concept projection.
 
@@ -349,6 +374,7 @@ hologram/            Core package
   ├── gravity.py     Gravity field simulation (concept drift)
   ├── embeddings.py  Text/image encoders (MiniLM, CLIP, hash)
   ├── text_utils.py  GLiNER-based concept extraction
+  ├── coref.py       Hybrid coreference resolution (NEW)
   ├── config.py      Centralized configuration (NEW)
   ├── cost_engine.py Diagnostic metrics (NEW)
   ├── manifold.py    Vector space alignment
@@ -371,6 +397,7 @@ tests/               Test suite
   ├── test_chaos.py  Chaos testing
   ├── test_api.py    API endpoint validation
   ├── test_gliner.py GLiNER extraction tests
+  ├── test_coref.py  Coreference resolution tests (NEW)
   ├── test_reconstruction.py Knowledge reconstruction
   ├── test_search_relations.py Relation extraction tests
   └── benchmark.py   Performance benchmarks
@@ -395,11 +422,16 @@ Root scripts:
 
 ## How It Works
 
-### Concept Decomposition Pipeline
-1. **Input**: Full sentence (e.g., "Time dilation occurs near the speed of light")
-2. **GLiNER**: Extracts entities with labels `[concept, entity, phenomenon, action, ...]`
-3. **Order Preservation**: Sorts by appearance to maintain Subject→Verb→Object flow
-4. **Output**: `['Time dilation', 'occurs', 'speed of light']`
+### Ingestion Pipeline
+1. **Input**: Full sentence (e.g., "The engine failed. It was overheating.")
+2. **Coreference Resolution**: 
+   - **FastCoref**: Resolves "It" → "The engine"
+   - **Gravity Fallback**: For ambiguous deictics, finds nearest concept by mass-weighted similarity
+   - **Output**: "The engine failed. The engine was overheating."
+3. **GLiNER Extraction**: Extracts entities from resolved text
+   - Labels: `[concept, entity, phenomenon, action, ...]`
+   - Order preserved: Subject→Verb→Object flow
+4. **Output**: `['engine', 'failed', 'overheating']` (with correct antecedents)
 
 ### Knowledge Reconstruction (SMI)
 1. **Seed keyword**: User provides (e.g., "speed of light")

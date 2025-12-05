@@ -45,6 +45,12 @@ class GravityConfig:
     COOLDOWN_STEPS: int = 10
 
 @dataclass
+class CorefConfig:
+    ENABLE_COREF: bool = True
+    ENABLE_GRAVITY_FALLBACK: bool = True
+    COREF_MODEL: str = "fastcoref"  # or specific model path
+
+@dataclass
 class EmbeddingConfig:
     # Model names
     MINILM_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
@@ -62,6 +68,7 @@ class Config:
     storage = StorageConfig()
     server = ServerConfig()
     gravity = GravityConfig()
+    coref = CorefConfig()
     embedding = EmbeddingConfig()
     
     # Track if loaded from global config
@@ -71,7 +78,7 @@ class Config:
     def to_dict(cls) -> Dict[str, Any]:
         """Serialize all config sections to a flat dictionary."""
         result = {}
-        for section_name in ["core", "storage", "server", "gravity", "embedding"]:
+        for section_name in ["core", "storage", "server", "gravity", "coref", "embedding"]:
             section = getattr(cls, section_name)
             for f in fields(section):
                 key = f"{section_name}.{f.name}"
@@ -89,6 +96,7 @@ class Config:
             "storage": cls.storage,
             "server": cls.server,
             "gravity": cls.gravity,
+            "coref": cls.coref,
             "embedding": cls.embedding,
         }
         

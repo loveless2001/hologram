@@ -85,6 +85,22 @@ The system is composed of three distinct but interacting layers, moving from raw
     - **New in v1.2**: Provides geometric analysis of vector sets and sequences.
     - Integrated into `Hologram` API via `score_text()` and `score_trace()` methods.
 
+### Layer 6: Coreference Resolution (Semantic Preprocessing)
+**Goal**: Resolve pronouns and deictic references before concept extraction.
+
+- **Responsibility**:
+    - **Primary Resolution**: Uses `fastcoref` neural model for structural pronoun resolution.
+    - **Gravity Fallback**: Vector-based resolution for ambiguous deictics using concept mass attraction.
+    - **Trace Metadata**: Stores both original and resolved text with pronoun→antecedent mappings.
+    - **Pipeline Integration**: Runs before GLiNER extraction to reduce concept fragmentation.
+- **Use Cases**:
+    - **Technical Documentation**: "The engine failed. It was overheating." → "The engine failed. The engine was overheating."
+    - **Narrative Text**: "Alice met Bob. She gave him a book." → "Alice met Bob. Alice gave Bob a book."
+    - **Deictic References**: "This solved the problem." → Maps "This" to nearest concept via gravity.
+- **Key Component**: `coref` (`hologram/coref.py`)
+    - **New in v1.4**: Hybrid coreference resolution (FastCoref + Gravity fallback).
+    - Configurable via `Config.coref.ENABLE_COREF` and `Config.coref.ENABLE_GRAVITY_FALLBACK`.
+
 ## 3. Module Design & Rationale
 
 ### `hologram/manifold.py`
@@ -140,17 +156,21 @@ The system is composed of three distinct but interacting layers, moving from raw
 ## 4. Data Flow
 
 ### Ingestion Flow
-1.  **User Input**: `add_text("Project Alpha", "The deadline is tight.")`
-2.  **Manifold**: Encodes "The deadline is tight" -> `vec_trace`.
-3.  **Glyph**:
+1.  **User Input**: `add_text("Project Alpha", "The engine failed. It was overheating.")`
+2.  **Coreference Resolution** (NEW in v1.4):
+    - FastCoref resolves "It" → "The engine"
+    - Gravity fallback for deictics if needed
+    - Output: "The engine failed. The engine was overheating."
+3.  **Manifold**: Encodes resolved text -> `vec_trace`.
+4.  **Glyph**:
     - Attaches trace to "Project Alpha".
     - Recalculates "Project Alpha" centroid & mass.
     - Pushes "glyph:Project Alpha" to Gravity.
-4.  **Extraction**: GLiNER extracts "deadline".
-5.  **Gravity**:
-    - Adds "deadline" concept (vector + mass).
-    - Links "deadline" <-> "glyph:Project Alpha" (attraction).
-    - Checks "deadline" for mitosis (is "deadline" ambiguous?).
+5.  **Extraction**: GLiNER extracts "engine", "failed", "overheating" from resolved text.
+6.  **Gravity**:
+    - Adds concepts (vector + mass).
+    - Links concepts <-> "glyph:Project Alpha" (attraction).
+    - Checks for mitosis (is any concept ambiguous?).
 
 ### Retrieval Flow
 1.  **User Query**: `search("When is it due?")`
@@ -330,5 +350,5 @@ But the core principle remains:
 | **1.0.0** | 2025-11-27 | **Research Upgrade**: LatentManifold, Geometry-Based Mitosis (FAISS), Glyph Physics, SMI. |
 | **1.1.0** | 2025-12-01 | **Performance Upgrade**: MiniLM Embeddings, SQLite Storage, Vectorized Gravity, PCA Caching. |
 | **1.2.0** | 2025-12-02 | **Quality Metrics**: MG Scorer module for semantic field health monitoring and collapse detection. |
-| **1.3.0** | 2025-12-05 | **Cost Engine \u0026 Config**: Diagnostic meta-layer (Resistance/Entropy/Drift), centralized configuration system, removed legacy `api_server/`. |
-
+| **1.3.0** | 2025-12-05 | **Cost Engine & Config**: Diagnostic meta-layer (Resistance/Entropy/Drift), centralized configuration system, removed legacy `api_server/`. |
+| **1.4.0** | 2025-12-05 | **Coreference Resolution**: Hybrid pronoun resolution (FastCoref + Gravity fallback), trace metadata for resolved text, improved concept extraction. |

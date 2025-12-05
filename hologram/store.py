@@ -20,6 +20,8 @@ class Trace:
     content: str           # raw text, path, or payload
     vec: np.ndarray        # vector representation
     meta: dict = field(default_factory=dict)
+    resolved_text: Optional[str] = None  # Text with pronouns resolved
+    coref_map: Optional[Dict[str, str]] = None  # Map of resolved pronouns
 
 
 @dataclass
@@ -187,6 +189,8 @@ class MemoryStore:
                     "content": t.content,
                     "vec": t.vec.tolist(),
                     "meta": t.meta,
+                    "resolved_text": t.resolved_text,
+                    "coref_map": t.coref_map,
                 }
                 for t in self.traces.values()
             ],
@@ -261,6 +265,8 @@ class MemoryStore:
                 content=t_data["content"],
                 vec=vec,
                 meta=t_data.get("meta", {}),
+                resolved_text=t_data.get("resolved_text"),
+                coref_map=t_data.get("coref_map"),
             )
             # Add to store and index, but conditionally skip gravity update
             store.traces[trace.trace_id] = trace

@@ -731,6 +731,52 @@ class Gravity:
             
             return True
     
+    def resolve_pronoun(self, sentence: str, pronoun_span: str) -> Optional[str]:
+        """
+        Resolve a pronoun using vector similarity in the gravity field.
+        Fallback mechanism when structural coref fails.
+        """
+        if not self.concepts:
+            return None
+            
+        # 1. Encode the sentence context
+        # We use the whole sentence vector to find the "topic"
+        sent_vec = self.encode(sentence)
+        
+        # 2. Find nearest concept
+        # We want the concept that is most "attracted" to this sentence context
+        # This is effectively finding the topic of the sentence
+        
+        best_match = None
+        best_sim = -1.0
+        
+        # Optimization: Use FAISS if available via get_matrix, but for now iterate
+        # We only check Domain concepts (Tier 1)
+        
+        for name, concept in self.concepts.items():
+            if concept.tier != TIER_DOMAIN:
+                continue
+            if concept.canonical_id: # Skip aliases
+                continue
+                
+            sim = cosine(sent_vec, concept.vec)
+            
+            # Boost by mass? Heavier concepts are more likely topics?
+            # The user suggested: "GravityField.nearest(v_sentence) -> best_match"
+            # And "Gravity fallback picks the heavier attractor"
+            
+            # Let's use a gravity-weighted score: sim * log(mass)
+            score = sim * np.log1p(concept.mass)
+            
+            if score > best_sim:
+                best_sim = score
+                best_match = name
+                
+        if best_match:
+            log_event("COREF-FALLBACK", f"'{pronoun_span}' -> '{best_match}'", {"score": f"{best_sim:.3f}"})
+            
+        return best_match
+
     def resolve_canonical(self, name: str) -> str:
         """
         Follow the canonical_id chain to find the true canonical concept.
@@ -1071,6 +1117,10 @@ class GravityField:
     def check_mitosis(self, name: str) -> bool:
         """Wrapper for Gravity.check_mitosis."""
         return self.sim.check_mitosis(name)
+
+    def resolve_pronoun(self, sentence: str, pronoun_span: str) -> Optional[str]:
+        """Wrapper for Gravity.resolve_pronoun."""
+        return self.sim.resolve_pronoun(sentence, pronoun_span)
 
     def get_subgraph(self, concepts: List[str]) -> List[Dict]:
         """
