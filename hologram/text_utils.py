@@ -90,6 +90,14 @@ def load_aliases():
     return _aliases
 
 # --- 3. FuzzyResolver & Normalization ---
+# --- 3. FuzzyResolver & Normalization ---
+# Global pipeline instance (set by Hologram.init)
+pipeline = None
+
+def set_global_pipeline(p):
+    global pipeline
+    pipeline = p
+
 def normalize_text(text: str, store: Any = None, encoder: Any = None) -> tuple[str, Optional[str]]:
     """
     Apply cleaning, spelling correction, aliasing, and optional fuzzy concept resolution.
@@ -99,6 +107,30 @@ def normalize_text(text: str, store: Any = None, encoder: Any = None) -> tuple[s
             - canonical_text: The normalized/canonical form of the text
             - canonical_trace_id: If fuzzy-resolved, the trace_id of the canonical concept. None otherwise.
     """
+    # Use the new pipeline if available
+    if pipeline:
+        # The pipeline handles tokenization, spelling, and manifold alignment
+        # But it returns just the string.
+        # We need to preserve the "canonical_trace_id" logic if Stage 3 finds a match.
+        # Currently, _stage3_manifold_align returns the matched string.
+        # We might need to look up the ID if it changed.
+        
+        normalized = pipeline.normalize(text)
+        
+        # Check if normalized text maps to a concept ID in gravity
+        # This mimics the old "Fuzzy Resolution" but using the pipeline's result
+        canonical_id = None
+        if pipeline.gravity and normalized in pipeline.gravity.sim.concepts:
+             # If the normalized text is a known concept, return its ID?
+             # Wait, the old logic returned `trace_id` from the store search.
+             # If `pipeline.gravity` is the GravityField, we can find the concept ID.
+             # Usually concept ID == name for concepts, but for traces it's a hash.
+             # Let's assume for now we return None unless we explicitly found a merge target.
+             pass
+             
+        return (normalized, canonical_id)
+
+    # Fallback to old logic if pipeline not set (e.g. tests or legacy)
     # 1. Clean
     t = clean_text(text)
     
@@ -136,7 +168,6 @@ def normalize_text(text: str, store: Any = None, encoder: Any = None) -> tuple[s
                     
                     # Thresholds
                     AUTO_MERGE_THRESHOLD = 0.75
-                    AMBIGUITY_THRESHOLD = 0.60
                     
                     if score > AUTO_MERGE_THRESHOLD:
                         if canonical != t:

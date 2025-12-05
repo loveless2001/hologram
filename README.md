@@ -6,7 +6,19 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 
 ## ✨ Latest Features (Dec 2024)
 
-### 🔗 Hybrid Coreference Resolution (New!)
+### 🧹 Spelling Correction & Normalization Pipeline (New!)
+- **4-Stage Pipeline**: Cleans noisy input before it enters the semantic field
+  - **Stage 0**: Tokenization (unicode cleanup, space normalization)
+  - **Stage 1**: SymSpell dictionary-backed spell correction with gravity whitelist protection
+  - **Stage 2**: Optional LLM-based contextual rewrite (disabled by default)
+  - **Stage 3**: Manifold alignment (semantic near-neighbor mapping via gravity field)
+  - **Stage 4**: Canonicalization (lowercase, hyphen/underscore removal)
+- **Prevents Pollution**: Stops "gravty" and "gravity" from creating duplicate concepts
+- **Whitelist Protection**: Won't "correct" domain-specific terms like "QFT" or "SM"
+- **Read-Only Gravity**: Uses field for reference without modifying it during normalization
+- **Runs First**: Executes before coreference resolution for maximum effectiveness
+
+### 🔗 Hybrid Coreference Resolution
 - **FastCoref Integration**: High-accuracy pronoun resolution using neural coreference models
 - **Gravity Fallback**: Vector-based resolution for ambiguous deictics ("this", "that") using concept mass attraction
 - **Trace Metadata**: Stores both original and resolved text with pronoun→antecedent mappings
@@ -96,10 +108,11 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 - `gravity.py` – concept drift simulation and FAISS-backed `GravityField`
 - `embeddings.py` – MiniLM, CLIP, and hashing encoders
 - `text_utils.py` – GLiNER-based concept extraction
-- `coref.py` – **hybrid coreference resolution** (NEW)
-- `config.py` – **centralized configuration** (NEW)
-- `global_config.py` – **global config persistence & sync** (NEW)
-- `cost_engine.py` – **diagnostic metrics** (NEW)
+- `normalization.py` – **4-stage spelling correction & normalization pipeline** (NEW)
+- `coref.py` – **hybrid coreference resolution**
+- `config.py` – **centralized configuration**
+- `global_config.py` – **global config persistence & sync**
+- `cost_engine.py` – **diagnostic metrics**
 - `manifold.py` – vector space alignment
 - `retrieval.py` – probe-based dynamic retrieval
 - `smi.py` – Symbolic Memory Interface
@@ -378,9 +391,10 @@ hologram/            Core package
   ├── gravity.py     Gravity field simulation (concept drift)
   ├── embeddings.py  Text/image encoders (MiniLM, CLIP, hash)
   ├── text_utils.py  GLiNER-based concept extraction
-  ├── coref.py       Hybrid coreference resolution (NEW)
-  ├── config.py      Centralized configuration (NEW)
-  ├── cost_engine.py Diagnostic metrics (NEW)
+  ├── normalization.py Spelling correction & normalization pipeline (NEW)
+  ├── coref.py       Hybrid coreference resolution
+  ├── config.py      Centralized configuration
+  ├── cost_engine.py Diagnostic metrics
   ├── manifold.py    Vector space alignment
   ├── retrieval.py   Probe-based retrieval
   ├── smi.py         Symbolic Memory Interface
@@ -427,15 +441,21 @@ Root scripts:
 ## How It Works
 
 ### Ingestion Pipeline
-1. **Input**: Full sentence (e.g., "The engine failed. It was overheating.")
-2. **Coreference Resolution**: 
-   - **FastCoref**: Resolves "It" → "The engine"
+1. **Input**: Full sentence (e.g., "The gravty feild failed. It was unstable.")
+2. **Normalization Pipeline** (NEW):
+   - **SymSpell**: Corrects "gravty feild" → "gravity field"
+   - **Whitelist Check**: Preserves domain terms (e.g., "QFT", "SM")
+   - **Manifold Alignment**: Maps near-miss tokens to existing concepts
+   - **Canonicalization**: Standardizes formatting
+   - **Output**: "The gravity field failed. It was unstable."
+3. **Coreference Resolution**: 
+   - **FastCoref**: Resolves "It" → "The gravity field"
    - **Gravity Fallback**: For ambiguous deictics, finds nearest concept by mass-weighted similarity
-   - **Output**: "The engine failed. The engine was overheating."
-3. **GLiNER Extraction**: Extracts entities from resolved text
+   - **Output**: "The gravity field failed. The gravity field was unstable."
+4. **GLiNER Extraction**: Extracts entities from resolved text
    - Labels: `[concept, entity, phenomenon, action, ...]`
    - Order preserved: Subject→Verb→Object flow
-4. **Output**: `['engine', 'failed', 'overheating']` (with correct antecedents)
+5. **Output**: `['gravity field', 'failed', 'unstable']` (with correct antecedents and clean spelling)
 
 ### Knowledge Reconstruction (SMI)
 1. **Seed keyword**: User provides (e.g., "speed of light")

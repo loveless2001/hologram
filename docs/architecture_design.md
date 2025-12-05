@@ -18,13 +18,57 @@ This approach allows the system to handle ambiguity, contradiction, and evolutio
 
 ## 2. Architectural Layers
 
-The system is composed of three distinct but interacting layers, moving from raw data to symbolic structure.
+The system is composed of distinct but interacting layers, moving from raw text preprocessing to symbolic structure.
+
+### Layer 0: Text Normalization & Coreference Resolution (Text Preprocessing)
+**Goal**: Clean noisy input and resolve pronouns before encoding to prevent concept fragmentation.
+
+#### Stage 1: Normalization Pipeline
+**Responsibility**: Clean and normalize text before it enters the semantic field.
+
+- **Stage 0 - Tokenization**: Strip unicode artifacts, normalize spaces, canonicalize code tokens (`::`, `->`).
+- **Stage 1 - Spell Correction**: Dictionary-backed correction using **SymSpell**.
+    - **Whitelist Protection**: Checks `Gravity.concepts` to avoid correcting existing domain terms (e.g., "QFT", "SM").
+    - **Conservative**: Only corrects high-confidence errors to prevent false positives.
+- **Stage 2 - Contextual Rewrite** (Optional, disabled by default): LLM-based micro-correction for multi-token errors (e.g., "event horzon" → "event horizon").
+- **Stage 3 - Manifold Alignment**: Semantic near-neighbor mapping.
+    - Embeds unknown tokens and finds nearest concept in gravity field (cosine > 0.65).
+    - Maps "graviti" → "gravity" if semantically close.
+    - **Read-only**: Does not modify the field, only uses it as reference.
+- **Stage 4 - Canonicalization**: Deterministic formatting (lowercase, hyphen/underscore removal).
+
+**Example Flow**:
+```
+Input:  "The gravty feild colapses when drift accumlates."
+Stage 0: "The gravty feild colapses when drift accumlates."
+Stage 1: "The gravity field collapses when drift accumulates." (SymSpell)
+Stage 3: "The gravity field collapses when drift accumulates." (Manifold alignment)
+Stage 4: "the gravity field collapses when drift accumulates." (Canonicalization)
+```
+
+#### Stage 2: Coreference Resolution
+**Responsibility**: Resolve pronouns and deictic references in normalized text.
+
+- **Primary Resolution**: Uses `fastcoref` neural model for structural pronoun resolution.
+- **Gravity Fallback**: Vector-based resolution for ambiguous deictics using concept mass attraction.
+- **Trace Metadata**: Stores both original and resolved text with pronoun→antecedent mappings.
+- **Pipeline Integration**: Runs after normalization to work with clean text.
+
+**Use Cases**:
+- **Technical Documentation**: "The engine failed. It was overheating." → "The engine failed. The engine was overheating."
+- **Narrative Text**: "Alice met Bob. She gave him a book." → "Alice met Bob. Alice gave Bob a book."
+- **Deictic References**: "This solved the problem." → Maps "This" to nearest concept via gravity.
+
+**Key Components**: 
+- `normalization` (`hologram/normalization.py`) - **New in v1.5**
+- `coref` (`hologram/coref.py`)
+- Configurable via `Config.coref.ENABLE_COREF` and `Config.coref.ENABLE_GRAVITY_FALLBACK`.
 
 ### Layer 1: The Manifold (Encoding)
 **Goal**: Unify all inputs (text, images, search queries) into a single, consistent, normalized vector space.
 
 - **Responsibility**:
-    - Encodes raw data into high-dimensional vectors.
+    - Encodes raw data (after coreference resolution) into high-dimensional vectors.
     - Projects vectors onto a unit hypersphere (L2 normalization).
     - Aligns different modalities (e.g., CLIP for images, GLiNER/SentenceTransformers for text) into a shared latent space.
     - **New in v1.1**: Supports `TextMiniLM` (via `sentence-transformers`) for high-quality semantic embeddings, replacing random hashing as the default.
@@ -63,8 +107,8 @@ The system is composed of three distinct but interacting layers, moving from raw
     - Persists Traces, Glyphs, and Gravity State.
     - Supports pluggable backends.
 - **Backends**:
-    - **JSON**: Simple, human-readable, loads entirely into RAM. Good for small KBs.
-    - **SQLite**: Scalable, disk-based, supports partial loading. Good for large KBs (>100k items).
+    - **SQLite**: Default backend, scalable, disk-based, supports partial loading. Good for production and large KBs (>100k items).
+    - **JSON**: Legacy format, human-readable, loads entirely into RAM. Good for small KBs and debugging.
 - **Key Component**: `MemoryStore` (`hologram/store.py`) & `SqliteBackend` (`hologram/storage/sqlite_store.py`)
 
 ### Layer 5: MG Scorer (Quality Metrics)
@@ -84,22 +128,6 @@ The system is composed of three distinct but interacting layers, moving from raw
 - **Key Component**: `mg_scorer` (`hologram/mg_scorer.py`)
     - **New in v1.2**: Provides geometric analysis of vector sets and sequences.
     - Integrated into `Hologram` API via `score_text()` and `score_trace()` methods.
-
-### Layer 6: Coreference Resolution (Semantic Preprocessing)
-**Goal**: Resolve pronouns and deictic references before concept extraction.
-
-- **Responsibility**:
-    - **Primary Resolution**: Uses `fastcoref` neural model for structural pronoun resolution.
-    - **Gravity Fallback**: Vector-based resolution for ambiguous deictics using concept mass attraction.
-    - **Trace Metadata**: Stores both original and resolved text with pronoun→antecedent mappings.
-    - **Pipeline Integration**: Runs before GLiNER extraction to reduce concept fragmentation.
-- **Use Cases**:
-    - **Technical Documentation**: "The engine failed. It was overheating." → "The engine failed. The engine was overheating."
-    - **Narrative Text**: "Alice met Bob. She gave him a book." → "Alice met Bob. Alice gave Bob a book."
-    - **Deictic References**: "This solved the problem." → Maps "This" to nearest concept via gravity.
-- **Key Component**: `coref` (`hologram/coref.py`)
-    - **New in v1.4**: Hybrid coreference resolution (FastCoref + Gravity fallback).
-    - Configurable via `Config.coref.ENABLE_COREF` and `Config.coref.ENABLE_GRAVITY_FALLBACK`.
 
 ## 3. Module Design & Rationale
 
@@ -156,18 +184,23 @@ The system is composed of three distinct but interacting layers, moving from raw
 ## 4. Data Flow
 
 ### Ingestion Flow
-1.  **User Input**: `add_text("Project Alpha", "The engine failed. It was overheating.")`
-2.  **Coreference Resolution** (NEW in v1.4):
-    - FastCoref resolves "It" → "The engine"
+1.  **User Input**: `add_text("Project Alpha", "The gravty feild failed. It was unstable.")`
+2.  **Normalization Pipeline** (NEW in v1.5):
+    - **SymSpell**: "gravty feild" → "gravity field"
+    - **Manifold Alignment**: Checks if "gravity field" matches existing concept
+    - **Canonicalization**: "gravity field" → "gravity field"
+    - Output: "The gravity field failed. It was unstable."
+3.  **Coreference Resolution**:
+    - FastCoref resolves "It" → "The gravity field"
     - Gravity fallback for deictics if needed
-    - Output: "The engine failed. The engine was overheating."
-3.  **Manifold**: Encodes resolved text -> `vec_trace`.
-4.  **Glyph**:
+    - Output: "The gravity field failed. The gravity field was unstable."
+4.  **Manifold**: Encodes resolved text → `vec_trace`.
+5.  **Glyph**:
     - Attaches trace to "Project Alpha".
     - Recalculates "Project Alpha" centroid & mass.
     - Pushes "glyph:Project Alpha" to Gravity.
-5.  **Extraction**: GLiNER extracts "engine", "failed", "overheating" from resolved text.
-6.  **Gravity**:
+6.  **Extraction**: GLiNER extracts "gravity field", "failed", "unstable" from resolved text.
+7.  **Gravity**:
     - Adds concepts (vector + mass).
     - Links concepts <-> "glyph:Project Alpha" (attraction).
     - Checks for mitosis (is any concept ambiguous?).
@@ -352,3 +385,4 @@ But the core principle remains:
 | **1.2.0** | 2025-12-02 | **Quality Metrics**: MG Scorer module for semantic field health monitoring and collapse detection. |
 | **1.3.0** | 2025-12-05 | **Cost Engine & Config**: Diagnostic meta-layer (Resistance/Entropy/Drift), centralized configuration system, removed legacy `api_server/`. |
 | **1.4.0** | 2025-12-05 | **Coreference Resolution**: Hybrid pronoun resolution (FastCoref + Gravity fallback), trace metadata for resolved text, improved concept extraction. |
+| **1.5.0** | 2025-12-05 | **Normalization Pipeline**: 4-stage spelling correction and normalization (SymSpell + Manifold alignment + Canonicalization) before coreference, prevents duplicate concepts and false mitosis. |
