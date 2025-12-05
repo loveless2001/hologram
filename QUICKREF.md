@@ -6,14 +6,18 @@
 # 1. Start Hologram Server
 python -m hologram.server
 
-# 2. Start Streamlit UI (in another terminal)
-streamlit run web_ui.py
+# 2. Test the API
+curl http://localhost:8000/
 
-# 3. In browser:
-#    - Select "relativity.txt" 
-#    - Click "🔄 Load KB"
-#    - Switch to "🔍 Semantic Search" tab
-#    - Search for "speed of light"
+# 3. Ingest some text
+curl -X POST "http://localhost:8000/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{"project": "demo", "text": "Hologram is a semantic memory system.", "origin": "manual"}'
+
+# 4. Query the memory
+curl -X POST "http://localhost:8000/query" \
+  -H "Content-Type: application/json" \
+  -d '{"project": "demo", "text": "memory", "top_k": 3}'
 ```
 
 ---
@@ -36,10 +40,14 @@ streamlit run web_ui.py
 - [x] **Configurable labels** for entity types
 
 #### API Endpoints
-- [x] `/chat` - Conversational interface
-- [x] `/search` - Semantic keyword search
-- [x] `/viz-data` - 2D projection data
-- [x] `/kbs` - Knowledge base management (list/upload/delete)
+- [x] `/` - Health check
+- [x] `/ingest` - Ingest text into project memory
+- [x] `/query` - Probe-based semantic query
+- [x] `/memory/{project}` - Get memory summary
+- [x] `/save/{project}` - Save project memory
+- [x] `/load/{project}` - Load project memory
+- [x] `/projects` - List active projects
+- [x] `/project/{project}` - Delete project (DELETE)
 
 #### User Interfaces
 - [x] **Streamlit UI** with:
@@ -79,46 +87,60 @@ streamlit run web_ui.py
 
 ## 🎯 Use Cases
 
-### 1. Knowledge Base Q&A
-**Goal**: Search domain knowledge with keywords  
-**How**: Use Streamlit search tab or `/search` endpoint  
-**Example**: "speed of light" → Returns related physics concepts
+### 1. Code Memory (VSCode Extension)
+**Goal**: Track semantic relationships across codebase  
+**How**: Use `/ingest` endpoint to add code snippets  
+**Example**: Ingest function definitions → Query for "authentication logic"
 
-### 2. Concept Exploration
-**Goal**: Visualize how concepts cluster in semantic space  
-**How**: Visit `/viz/viz.html` after loading KB  
-**Example**: See "time dilation" near "spacetime" and "Special Relativity"
+### 2. Project Knowledge Base
+**Goal**: Build domain-specific memory per project  
+**How**: Use project-scoped ingestion and queries  
+**Example**: Ingest docs → Query for implementation details
 
-### 3. Memory Reconstruction
-**Goal**: Reconstruct context from partial information  
-**How**: Run `test_reconstruction.py` or use Chat  
-**Example**: From "gravity" → retrieves graph (mass, relations) → LLM explains concept
-**Feature**: Uses **Graph-Based Reconstruction** for higher coherence
+### 3. Semantic Query
+**Goal**: Find related concepts using probe physics  
+**How**: Use `/query` endpoint with natural language  
+**Example**: "How does authentication work?" → Returns relevant code/docs nodes
 
-### 4. Conversational AI
-**Goal**: Chat with knowledge base  
-**How**: Use Streamlit chat tab or `chat_cli.py`  
-**Example**: "What is time dilation?" → LLM response with memory context
+### 4. Memory Persistence
+**Goal**: Save and restore project memory across sessions  
+**How**: Use `/save/{project}` and `/load/{project}` endpoints  
+**Example**: Save at end of day → Load next morning
 
 ---
 
 ## 🔧 Common Workflows
 
-### Workflow A: Add New Knowledge Base
+### Workflow A: Create and Query a Project
 
 ```bash
-# 1. Create text file
-echo "Quantum entanglement connects distant particles.
-Superposition allows particles to exist in multiple states.
-Wave function collapse determines measurement outcomes." > data/kbs/quantum.txt
+# 1. Ingest text into project
+curl -X POST "http://localhost:8000/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project": "physics",
+    "text": "Quantum entanglement connects distant particles.",
+    "origin": "docs",
+    "tier": 1
+  }'
 
-# 2. Load in Streamlit UI
-#    - Upload via sidebar OR select from list
-#    - Click "🔄 Load KB"
+# 2. Add more concepts
+curl -X POST "http://localhost:8000/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project": "physics",
+    "text": "Superposition allows particles to exist in multiple states.",
+    "origin": "docs",
+    "tier": 1
+  }'
 
-# 3. Verify
-#    - Search for "quantum" in search tab
-#    - Check visualization at /viz/viz.html
+# 3. Query the memory
+curl -X POST "http://localhost:8000/query" \
+  -H "Content-Type: application/json" \
+  -d '{"project": "physics", "text": "quantum", "top_k": 5}' | jq
+
+# 4. Save the project
+curl -X POST "http://localhost:8000/save/physics"
 ```
 
 ### Workflow B: Test Concept Extraction
@@ -133,18 +155,30 @@ print(extract_concepts('Einstein developed the theory of relativity.'))
 # Output: ['Einstein', 'theory of relativity', ...]
 ```
 
-### Workflow C: Semantic Search via API
+### Workflow C: Ingest and Query via API
 
 ```bash
-# Load KB
-curl -X POST "http://localhost:8000/chat" \
+# Ingest text
+curl -X POST "http://localhost:8000/ingest" \
   -H "Content-Type: application/json" \
-  -d '{"message": "load", "kb_name": "relativity.txt"}'
+  -d '{
+    "project": "my_project",
+    "text": "Einstein developed the theory of relativity.",
+    "origin": "docs",
+    "tier": 1
+  }'
 
-# Search
-curl -X POST "http://localhost:8000/search" \
+# Query memory
+curl -X POST "http://localhost:8000/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "time", "top_k": 5}' | jq
+  -d '{
+    "project": "my_project",
+    "text": "relativity",
+    "top_k": 5
+  }' | jq
+
+# Get memory summary
+curl "http://localhost:8000/memory/my_project" | jq
 ```
 
 ---
@@ -187,9 +221,10 @@ Currently stored: ~20 concepts from relativity.txt
 - **Order approximation**: PCA projection may distort true semantic distances
 
 ### System
-- **Single KB at a time**: API server loads one KB in memory
-- **No multi-tenancy**: Concurrent users share same KB state
-- **No persistence auto-save**: Changes lost on server restart (unless explicitly saved)
+- **Project-based isolation**: Each project has separate memory instance
+- **SQLite storage**: Default backend (auto-migrates from legacy JSON)
+- **Auto-save on shutdown**: Projects saved to `~/.hologram_memory/<project>/memory.db`
+- **Tier-aware ingestion**: Supports 3-tier ontology (Domain/System/Meta)
 
 ---
 
@@ -234,19 +269,19 @@ Currently stored: ~20 concepts from relativity.txt
 
 ### Debug Commands
 ```bash
-# Check GLiNER model cache
-ls ~/.cache/huggingface/hub/ | grep gliner
+# Check server health
+curl http://localhost:8000/ | jq
 
-# Test search endpoint directly
-curl -X POST "http://localhost:8000/search" \
+# List active projects
+curl http://localhost:8000/projects | jq
+
+# Get project memory summary
+curl http://localhost:8000/memory/my_project | jq
+
+# Test ingest endpoint
+curl -X POST "http://localhost:8000/ingest" \
   -H "Content-Type: application/json" \
-  -d '{"query": "test", "top_k": 1}'
-
-# Run reconstruction test
-python test_reconstruction.py
-
-# Check concept count
-curl -s "http://localhost:8000/viz-data" | jq '.points | length'
+  -d '{"project": "test", "text": "Hello world", "origin": "manual"}'
 ```
 
 ---

@@ -155,11 +155,14 @@ for c in concepts:
 
 ### Save/Load
 ```python
-# Save
+# Save (defaults to SQLite 'memory.db' in project dir)
+holo.save()
+
+# Save to specific JSON file (legacy/backup)
 holo.save("my_hologram.json")
 
-# Load (skip auto-ingestion if already saved)
-holo = Hologram.load("my_hologram.json", auto_ingest_system=False)
+# Load (auto-detects backend)
+holo = Hologram.load("memory.db", auto_ingest_system=False)
 ```
 
 ## Debugging

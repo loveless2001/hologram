@@ -86,17 +86,35 @@ class MemorySummary(BaseModel):
 def get_or_create_hologram(project: str) -> Hologram:
     """Get existing Hologram instance or create new one."""
     if project not in hologram_instances:
-        # Check if saved state exists
-        save_path = MEMORY_DIR / project / "memory.json"
+        # Determine file extension based on config
+        file_ext = Config.storage.SQLITE_DB_NAME if Config.storage.USE_SQLITE else "memory.json"
+        project_dir = MEMORY_DIR / project
+        project_dir.mkdir(parents=True, exist_ok=True)
+        save_path = project_dir / file_ext
+        
+        # Also check for legacy .json file if SQLite is enabled
+        legacy_json_path = project_dir / "memory.json"
         
         if save_path.exists():
-            print(f"[Server] Loading existing memory for project '{project}'")
+            print(f"[Server] Loading existing memory for project '{project}' from {file_ext}")
             hologram_instances[project] = Hologram.load(
                 str(save_path),
                 encoder_mode="minilm",
                 use_gravity=True,
                 auto_ingest_system=True
             )
+        elif Config.storage.USE_SQLITE and legacy_json_path.exists():
+            # Migrate from JSON to SQLite
+            print(f"[Server] Migrating project '{project}' from JSON to SQLite")
+            hologram_instances[project] = Hologram.load(
+                str(legacy_json_path),
+                encoder_mode="minilm",
+                use_gravity=True,
+                auto_ingest_system=True
+            )
+            # Save in new format
+            hologram_instances[project].save(str(save_path))
+            print(f"[Server] Migration complete, saved to {save_path}")
         else:
             print(f"[Server] Creating new Hologram for project '{project}'")
             hologram_instances[project] = Hologram.init(
@@ -258,7 +276,7 @@ async def save_memory(project: str, path: Optional[str] = None):
     """
     Save project memory to disk.
     
-    Defaults to ~/.hologram_memory/<project>/memory.json
+    Defaults to ~/.hologram_memory/<project>/memory.db (SQLite) or memory.json
     """
     if project not in hologram_instances:
         raise HTTPException(
@@ -270,7 +288,9 @@ async def save_memory(project: str, path: Optional[str] = None):
         if path is None:
             project_dir = MEMORY_DIR / project
             project_dir.mkdir(exist_ok=True)
-            path = str(project_dir / "memory.json")
+            # Use config to determine file format
+            file_name = Config.storage.SQLITE_DB_NAME if Config.storage.USE_SQLITE else "memory.json"
+            path = str(project_dir / file_name)
         
         hologram_instances[project].save(path)
         

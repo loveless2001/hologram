@@ -19,11 +19,11 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 - **Order preservation**: Extracted concepts maintain narrative order for better memory reconstruction
 - **Labels**: `concept`, `entity`, `phenomenon`, `object`, `theory`, `action`, `relationship`, `interaction`, `verb`
 
-### 🔍 Semantic Search Interface
-- **REST API**: `/search` endpoint for keyword-based semantic search
-- **Streamlit UI**: Two-tab interface with Chat and Semantic Search
-- **Visual results**: Color-coded similarity scores (🟢 80%+, 🟡 60-79%, 🔵 <60%)
-- **Adjustable results**: Query 1-20 top matches
+### 🔍 Project-Based Memory API
+- **REST API**: Project-scoped ingestion and query endpoints
+- **Probe Physics**: Dynamic retrieval using gravitational field simulation
+- **Tier-Aware**: Supports 3-tier ontology (Domain/System/Meta)
+- **Persistence**: Auto-save to `~/.hologram_memory/<project>/`
 
 ### 🚀 Phase 4: Field-Level Evaluation (New!)
 - **Stress Testing Suite**: Validates system coherence under pressure (intra-field stability, deformation, probe drift, memory degradation).
@@ -265,40 +265,44 @@ Visit `http://localhost:8000/viz/viz.html` after loading a KB to see the 2D conc
 
 ## API Endpoints
 
-### Knowledge Base Management
-- `GET /kbs` – list available knowledge bases
-- `POST /kbs/upload` – upload new KB (text file)
-- `DELETE /kbs/{name}` – delete KB
-
-### Memory Operations
-- `POST /chat` – conversational interface (loads KB if `kb_name` provided)
+### Core Operations
+- `GET /` – health check and server status
+- `POST /ingest` – ingest text into project memory
   ```json
-  {"message": "What is time dilation?", "kb_name": "relativity.txt"}
+  {
+    "project": "my_project",
+    "text": "The fusion engine uses magnetic confinement.",
+    "origin": "code",  // code, docs, config, manual
+    "tier": 1,  // 1=Domain, 2=System
+    "metadata": {"file": "engine.py", "line": 42}
+  }
   ```
 
-- `POST /search` – semantic search
+- `POST /query` – semantic query using probe physics
   ```json
-  {"query": "speed of light", "top_k": 10}
+  {
+    "project": "my_project",
+    "text": "How does the engine work?",
+    "top_k": 5
+  }
   ```
   Returns:
   ```json
   {
-    "query": "speed of light",
-    "results": [
-      {"content": "speed of light", "score": 1.0},
-      {"content": "spacetime", "score": 0.74}
-    ]
+    "query": "How does the engine work?",
+    "nodes": [{"name": "fusion engine", "mass": 2.3, ...}],
+    "edges": [{"a": "engine", "b": "magnetic", "relation": 0.82}],
+    "glyphs": [{"id": "file:engine.py", "mass": 5.1}],
+    "trajectory_steps": [[0.1, 0.2, ...], ...]
   }
   ```
 
-### Visualization
-- `GET /viz-data` – returns 2D projection points and labels
-  ```json
-  {
-    "points": [[x1, y1], [x2, y2], ...],
-    "labels": ["concept1", "concept2", ...]
-  }
-  ```
+### Project Management
+- `GET /projects` – list all active projects
+- `GET /memory/{project}` – get memory summary (concept counts, recent traces)
+- `POST /save/{project}` – save project to disk
+- `POST /load/{project}` – load project from disk
+- `DELETE /project/{project}` – remove project from memory
 
 ---
 
@@ -478,9 +482,9 @@ LLM Output: *"The speed of light is intrinsically linked to time dilation, a rel
 - **Missing verbs**: Some abstract verbs may not be captured. Adjust threshold (default: 0.25) in `extract_concepts()`
 
 ### API Server
-- **404 on /search**: Restart server after adding endpoint
-- **"No KB loaded" error**: Use `/chat` with `{"message": "load", "kb_name": "relativity.txt"}` first
-- **Empty visualization**: Ensure KB is loaded and contains processed concepts
+- **Server not responding**: Check if port 8000 is already in use
+- **Project not found**: Use `/ingest` to create a project first
+- **Empty query results**: Ensure project has ingested data
 
 ---
 
@@ -491,6 +495,7 @@ LLM Output: *"The speed of light is intrinsically linked to time dilation, a rel
 - **Concept extraction**: ~0.5-2s per sentence on CPU (cached model)
 - **Search latency**: < 1ms (FAISS + MiniLM)
 - **Visualization**: < 5ms (PCA Cached)
+- **Storage**: SQLite backend (default) for scalable persistence, JSON also supported
 
 ---
 
