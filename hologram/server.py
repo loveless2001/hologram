@@ -177,6 +177,10 @@ async def ingest_text(req: IngestRequest):
         }
     
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"\n[INGEST ERROR] {str(e)}")
+        print(f"[TRACEBACK]\n{error_details}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

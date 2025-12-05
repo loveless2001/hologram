@@ -172,7 +172,7 @@ class NormalizationPipeline:
             return text
             
         # Check if the text is already a known concept
-        if text in self.gravity.concepts:
+        if self._is_whitelisted(text):
             return text
             
         # Embed the text
@@ -216,4 +216,13 @@ class NormalizationPipeline:
         """Check if word exists in Gravity concepts."""
         if not self.gravity:
             return False
-        return word in self.gravity.concepts
+            
+        # Handle Gravity wrapper (GravityField) vs raw Gravity
+        if hasattr(self.gravity, 'sim') and hasattr(self.gravity.sim, 'concepts'):
+            return word in self.gravity.sim.concepts
+        
+        # Fallback for raw Gravity instance
+        if hasattr(self.gravity, 'concepts'):
+            return word in self.gravity.concepts
+            
+        return False
