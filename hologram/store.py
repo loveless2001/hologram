@@ -22,6 +22,8 @@ class Trace:
     meta: dict = field(default_factory=dict)
     resolved_text: Optional[str] = None  # Text with pronouns resolved
     coref_map: Optional[Dict[str, str]] = None  # Map of resolved pronouns
+    span: Optional[Tuple[int, int]] = None      # Code span (start_line, end_line)
+    source_file: Optional[str] = None           # Path to source file
 
 
 @dataclass
@@ -30,6 +32,7 @@ class Glyph:
     title: str
     notes: str = ""
     trace_ids: List[str] = field(default_factory=list)
+    code_meta: Optional[Dict] = None            # Metadata for code symbols
 
 
 # --- Lightweight vector index ---
@@ -191,6 +194,10 @@ class MemoryStore:
                     "meta": t.meta,
                     "resolved_text": t.resolved_text,
                     "coref_map": t.coref_map,
+                    "resolved_text": t.resolved_text,
+                    "coref_map": t.coref_map,
+                    "span": t.span,
+                    "source_file": t.source_file,
                 }
                 for t in self.traces.values()
             ],
@@ -200,6 +207,8 @@ class MemoryStore:
                     "title": g.title,
                     "notes": g.notes,
                     "trace_ids": g.trace_ids,
+                    "trace_ids": g.trace_ids,
+                    "code_meta": g.code_meta,
                 }
                 for g in self.glyphs.values()
             ],
@@ -267,6 +276,8 @@ class MemoryStore:
                 meta=t_data.get("meta", {}),
                 resolved_text=t_data.get("resolved_text"),
                 coref_map=t_data.get("coref_map"),
+                span=tuple(t_data["span"]) if t_data.get("span") else None,
+                source_file=t_data.get("source_file"),
             )
             # Add to store and index, but conditionally skip gravity update
             store.traces[trace.trace_id] = trace
@@ -285,6 +296,7 @@ class MemoryStore:
                 title=g_data.get("title", g_data["glyph_id"]),
                 notes=g_data.get("notes", ""),
                 trace_ids=list(g_data.get("trace_ids", [])),
+                code_meta=g_data.get("code_meta"),
             )
             store.glyphs[glyph.glyph_id] = glyph
 

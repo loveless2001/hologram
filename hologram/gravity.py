@@ -392,7 +392,7 @@ class Gravity:
                 return False
             
             # NEW: Origin check
-            if concept.origin == "system_design":
+            if concept.origin == "system_design" or concept.origin == "code_map":
                 return False
             
             # NEW: Namespace protection
@@ -598,6 +598,12 @@ class Gravity:
                 
             # NEW: Neighborhood divergence check
             if self.neighborhood_divergence(name_a, name_b) > 0.6:
+                continue
+
+            # NEW: Code Concept Protection
+            # Code concepts rely on precise file/span definitions.
+            # We prevent fusion of code concepts with anything to preserve their identity.
+            if self.concepts[name_a].origin == "code_map" or self.concepts[name_b].origin == "code_map":
                 continue
 
             sim = distances[1]

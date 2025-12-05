@@ -6,7 +6,15 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 
 ## ✨ Latest Features (Dec 2024)
 
-### 🧹 Spelling Correction & Normalization Pipeline (New!)
+### 💻 Code Mapping Layer (New!)
+- **AST-Based Parsing**: Extracts classes, functions, and symbols from Python source files
+- **Precise Source Mapping**: Maps each concept to exact file path and line span
+- **Semantic Code Search**: Query code using natural language ("authentication logic", "orbit math")
+- **Fusion Protection**: Code concepts maintain file-specific identity, preventing incorrect merging
+- **Docstring Integration**: Attaches documentation as traces for richer semantic understanding
+- **REST API**: `/ingest/code` and `/query/code` endpoints for programmatic access
+
+### 🧹 Spelling Correction & Normalization Pipeline
 - **4-Stage Pipeline**: Cleans noisy input before it enters the semantic field
   - **Stage 0**: Tokenization (unicode cleanup, space normalization)
   - **Stage 1**: SymSpell dictionary-backed spell correction with gravity whitelist protection
@@ -102,13 +110,13 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 ## Components
 
 ### Core Package (`hologram/`)
-- `api.py` – public `Hologram` API (`add_text`, `add_image_path`, search, persistence)
+- `api.py` – public `Hologram` API (`add_text`, `add_image_path`, `ingest_code`, search, persistence)
 - `server.py` – **FastAPI server** with REST endpoints for VSCode extension
 - `chatbot.py` – chat memory, provider abstractions, CLI orchestration helpers
 - `gravity.py` – concept drift simulation and FAISS-backed `GravityField`
 - `embeddings.py` – MiniLM, CLIP, and hashing encoders
 - `text_utils.py` – GLiNER-based concept extraction
-- `normalization.py` – **4-stage spelling correction & normalization pipeline** (NEW)
+- `normalization.py` – **4-stage spelling correction & normalization pipeline**
 - `coref.py` – **hybrid coreference resolution**
 - `config.py` – **centralized configuration**
 - `global_config.py` – **global config persistence & sync**
@@ -117,6 +125,10 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 - `retrieval.py` – probe-based dynamic retrieval
 - `smi.py` – Symbolic Memory Interface
 - `mg_scorer.py` – semantic quality metrics
+- `code_map/` – **Code Mapping Layer** (NEW)
+  - `parser.py` – AST-based Python code parsing
+  - `extractor.py` – Symbol extraction and normalization
+  - `mapper.py` – Concept-to-Glyph mapping with source metadata
 - `storage/` – SQLite backend for scalable persistence
 
 ### Command-Line Tools
@@ -270,7 +282,24 @@ python scripts/setup_hologram.py --init  # Updates global DB
 ```
 
 
-### 6. Visualization
+### 6. Code Ingestion
+
+```python
+from hologram import Hologram
+
+holo = Hologram.init(encoder_mode="minilm", use_gravity=True)
+
+# Ingest a Python source file
+num_concepts = holo.ingest_code("/path/to/source.py")
+print(f"Extracted {num_concepts} code concepts")
+
+# Query for code
+results = holo.query_code("authentication logic", top_k=5)
+for result in results:
+    print(f"{result['concept']} in {result['file']} at lines {result['span']}")
+```
+
+### 7. Visualization
 
 Visit `http://localhost:8000/viz/viz.html` after loading a KB to see the 2D concept projection.
 
@@ -281,6 +310,14 @@ Visit `http://localhost:8000/viz/viz.html` after loading a KB to see the 2D conc
 ### Core Operations
 - `GET /` – health check and server status
 - `POST /ingest` – ingest text into project memory
+- `POST /ingest/code` – ingest source code file (extracts symbols, maps to concepts)
+  ```json
+  {
+    "project": "my_project",
+    "path": "/path/to/source.py",
+    "tier": 1
+  }
+  ```
   ```json
   {
     "project": "my_project",
@@ -307,6 +344,29 @@ Visit `http://localhost:8000/viz/viz.html` after loading a KB to see the 2D conc
     "edges": [{"a": "engine", "b": "magnetic", "relation": 0.82}],
     "glyphs": [{"id": "file:engine.py", "mass": 5.1}],
     "trajectory_steps": [[0.1, 0.2, ...], ...]
+  }
+  ```
+
+- `POST /query/code` – query specifically for code concepts
+  ```json
+  {
+    "project": "my_project",
+    "text": "authentication logic",
+    "top_k": 5
+  }
+  ```
+  Returns:
+  ```json
+  {
+    "results": [
+      {
+        "concept": "function:authenticate_user",
+        "file": "/path/to/auth.py",
+        "span": [42, 67],
+        "score": 0.89,
+        "snippet": "def authenticate_user(username, password)..."
+      }
+    ]
   }
   ```
 

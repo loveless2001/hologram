@@ -161,17 +161,16 @@ class Hologram:
                  **meta):
         
         # 1. Normalize text (cleaning + spelling + fuzzy resolution)
-        # User requested normalization BEFORE coreference.
-        
-        # We want to use the normalized text for everything downstream (coref, extraction, storage)
-        # But we might want to keep the raw original for archival?
-        # Let's store raw in meta if it differs.
+        skip_nlp = meta.get("skip_nlp", False)
         
         raw_text = text
-        text, canonical_trace_id = normalize_text(text, store=self.store, encoder=self.text_encoder)
+        canonical_trace_id = None
         
-        if text != raw_text:
-            meta["raw_text"] = raw_text
+        if not skip_nlp:
+            text, canonical_trace_id = normalize_text(text, store=self.store, encoder=self.text_encoder)
+            
+            if text != raw_text:
+                meta["raw_text"] = raw_text
 
         # --- Coreference Resolution ---
         from .config import Config
@@ -180,18 +179,18 @@ class Hologram:
         resolved_text = text
         coref_map = {}
         
-        if Config.coref.ENABLE_COREF:
+        if not skip_nlp and Config.coref.ENABLE_COREF:
             # 1. Structural Resolution
             # Pass NORMALIZED text to coref
             resolved_text, coref_map = resolve(text)
             
             # 2. Gravity Fallback
+            normalized_pronouns = ["this", "that", "it", "these", "those"]
+            
             if Config.coref.ENABLE_GRAVITY_FALLBACK and self.field:
-                target_pronouns = ["this", "that", "it", "these", "those"]
-                
                 for word in text.split():
                     w_clean = word.lower().strip(".,!?")
-                    if w_clean in target_pronouns and word not in coref_map:
+                    if w_clean in normalized_pronouns and word not in coref_map:
                         # Try gravity resolution
                         antecedent = self.field.resolve_pronoun(text, word)
                         if antecedent:
@@ -263,6 +262,49 @@ class Hologram:
             self.field.add(trace_id, vec)
         return trace_id
 
+    def ingest_code(self, file_path: str, add_to_field: bool = True):
+        """
+        Ingest a source code file, extracting symbols and mapping them to concepts.
+        """
+        from .code_map.parser import CodeParser
+        from .code_map.extractor import SymbolExtractor
+        from .code_map.mapper import ConceptMapper
+        
+        # 1. Parse
+        parser = CodeParser()
+        raw_nodes = parser.parse_file(file_path)
+        
+        # 2. Extract
+        extractor = SymbolExtractor()
+        concepts = extractor.extract(raw_nodes, file_path)
+        
+        # 3. Map & Store
+        mapper = ConceptMapper()
+        
+        # Define vectorizer callback using Manifold + Encoder
+        def vectorizer(text: str) -> np.ndarray:
+            return self.manifold.align_text(text, self.text_encoder)
+            
+        for concept in concepts:
+            glyph, trace = mapper.map_concept(concept, vectorizer)
+            
+            # Add to store
+            self.store.upsert_glyph(glyph)
+            self.store.add_trace(trace)
+            self.store.link_trace(glyph.glyph_id, trace.trace_id)
+            
+            # Add to Gravity Field
+            if self.field and add_to_field:
+                # Use concept ID as the gravity node name
+                self.field.add(
+                    glyph.glyph_id,
+                    trace.vec,
+                    tier=1, # Code is domain knowledge
+                    project=self.project,
+                    origin="code_map"
+                )
+        return len(concepts)
+
     # --- Read operations ---
     def recall_glyph(self, glyph_id: str):
         return self.glyphs.recall(glyph_id)
@@ -276,6 +318,30 @@ class Hologram:
         # Use manifold for alignment
         qv = self.manifold.align_image(path, self.image_encoder)
         return self.glyphs.search_across(qv, top_k=top_k)
+
+    def query_code(self, query: str, top_k: int = 5):
+        """
+        Retrieve code concepts matching the query.
+        """
+        qv = self.manifold.align_text(query, self.text_encoder)
+        
+        # Search traces
+        hits = self.store.search_traces(qv, top_k=top_k * 5) # Fetch more, filter later
+        
+        results = []
+        for trace_id, score in hits:
+            trace = self.store.get_trace(trace_id)
+            if trace and trace.kind == "code":
+                results.append({
+                    "concept": trace.meta.get("code_type", "symbol") + ":" + trace_id.split(":")[-1],
+                    "file": trace.source_file,
+                    "span": trace.span,
+                    "score": float(score),
+                    "snippet": trace.content[:200]
+                })
+                
+        return sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
+
 
     def retrieve(self, query: str) -> MemoryPacket:
         """

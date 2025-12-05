@@ -217,5 +217,14 @@ Relations play a key role in **Concept Mitosis**:
 
 ---
 
-**Last Updated**: 2023-11-26
+**Last Updated**: 2025-12-06  
 **Feature Status**: ✅ Implemented (Beta)
+
+## Code Concept Relations
+
+With the new **Code Mapping Layer**, code symbols (classes, functions) are also represented as concepts in the gravity field. However, they have special properties:
+
+- **Fusion Protection**: Code concepts from different files/spans won't fuse, preserving their precise source locations.
+- **Semantic Relations**: Code concepts can still form relations with text concepts (e.g., "authentication" text ↔ `authenticate_user()` function).
+- **Queryable**: Use `/query/code` to search specifically for code symbols while preserving file/span metadata.
+

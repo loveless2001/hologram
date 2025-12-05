@@ -6,6 +6,7 @@
 - **Removed**: Legacy `api_server/` directory
 - **Added**: `hologram/config.py` for centralized configuration
 - **Added**: `hologram/cost_engine.py` for diagnostic metrics
+- **Added**: `hologram/code_map/` for Code Mapping Layer
 - **Consolidated**: Single server at `hologram/server.py`
 
 ## Current Structure
@@ -140,6 +141,7 @@ python tests/test_search_relations.py
 **Impact**: Medium (removed legacy server, added config system)
 
 ## Update History
+- **Dec 6, 2025**: Added `hologram/code_map/` for AST-based code ingestion
 - **Dec 5, 2025**: Removed `api_server/`, added `hologram/config.py` and `hologram/cost_engine.py`
 - **Nov 26, 2023**: Refactored concept logic, added Mitosis and Graph-Based Reconstruction
 

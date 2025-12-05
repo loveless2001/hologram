@@ -42,7 +42,9 @@ curl -X POST "http://localhost:8000/query" \
 #### API Endpoints
 - [x] `/` - Health check
 - [x] `/ingest` - Ingest text into project memory
+- [x] `/ingest/code` - Ingest source code file (extracts symbols)
 - [x] `/query` - Probe-based semantic query
+- [x] `/query/code` - Query specifically for code concepts
 - [x] `/memory/{project}` - Get memory summary
 - [x] `/save/{project}` - Save project memory
 - [x] `/load/{project}` - Load project memory
@@ -179,6 +181,28 @@ curl -X POST "http://localhost:8000/query" \
 
 # Get memory summary
 curl "http://localhost:8000/memory/my_project" | jq
+```
+
+### Workflow D: Ingest and Query Code
+
+```bash
+# Ingest a Python source file
+curl -X POST "http://localhost:8000/ingest/code" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project": "my_codebase",
+    "path": "/path/to/source.py",
+    "tier": 1
+  }'
+
+# Query for code concepts
+curl -X POST "http://localhost:8000/query/code" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project": "my_codebase",
+    "text": "authentication logic",
+    "top_k": 5
+  }' | jq
 ```
 
 ---

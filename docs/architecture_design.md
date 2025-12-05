@@ -111,6 +111,29 @@ Stage 4: "the gravity field collapses when drift accumulates." (Canonicalization
     - **JSON**: Legacy format, human-readable, loads entirely into RAM. Good for small KBs and debugging.
 - **Key Component**: `MemoryStore` (`hologram/store.py`) & `SqliteBackend` (`hologram/storage/sqlite_store.py`)
 
+### Layer 4.5: Code Mapping (Source Code Intelligence)
+**Goal**: Extract and map source code symbols to semantic concepts with precise source locations.
+
+- **Responsibility**:
+    - Parses Python source files using AST (Abstract Syntax Tree).
+    - Extracts classes, functions, methods, and their docstrings.
+    - Maps each symbol to a concept with file path and line span metadata.
+    - Generates semantic vectors from symbol names and documentation.
+    - Integrates code concepts into the Gravity Field with fusion protection.
+- **Components**:
+    - **Parser** (`hologram/code_map/parser.py`): AST-based extraction of code structure.
+    - **Extractor** (`hologram/code_map/extractor.py`): Symbol normalization and concept ID generation.
+    - **Mapper** (`hologram/code_map/mapper.py`): Concept-to-Glyph mapping with source metadata.
+- **Key Features**:
+    - **Precise Mapping**: Each concept stores `source_file` and `span` (line numbers).
+    - **Fusion Protection**: Code concepts from different files won't merge in the gravity field.
+    - **Semantic Search**: Query code using natural language ("authentication logic" → `authenticate_user()`).
+    - **Docstring Integration**: Function/class documentation becomes part of the concept's semantic representation.
+- **API Integration**:
+    - `Hologram.ingest_code(path)`: Ingest a source file.
+    - `Hologram.query_code(query, top_k)`: Search specifically for code concepts.
+    - Server endpoints: `/ingest/code` and `/query/code`.
+
 ### Layer 5: MG Scorer (Quality Metrics)
 **Goal**: Quantify the geometric health and stability of the semantic field.
 
@@ -386,3 +409,4 @@ But the core principle remains:
 | **1.3.0** | 2025-12-05 | **Cost Engine & Config**: Diagnostic meta-layer (Resistance/Entropy/Drift), centralized configuration system, removed legacy `api_server/`. |
 | **1.4.0** | 2025-12-05 | **Coreference Resolution**: Hybrid pronoun resolution (FastCoref + Gravity fallback), trace metadata for resolved text, improved concept extraction. |
 | **1.5.0** | 2025-12-05 | **Normalization Pipeline**: 4-stage spelling correction and normalization (SymSpell + Manifold alignment + Canonicalization) before coreference, prevents duplicate concepts and false mitosis. |
+| **1.6.0** | 2025-12-06 | **Code Mapping Layer**: AST-based code ingestion, precise source mapping (file + span), semantic code search, fusion protection for code concepts, `/ingest/code` and `/query/code` endpoints. |

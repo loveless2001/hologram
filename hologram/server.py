@@ -69,6 +69,16 @@ class QueryRequest(BaseModel):
     text: str
     top_k: int = 5
 
+class IngestCodeRequest(BaseModel):
+    project: str
+    path: str
+    tier: int = TIER_DOMAIN
+
+class QueryCodeRequest(BaseModel):
+    project: str
+    text: str
+    top_k: int = 5
+
 
 class MemorySummary(BaseModel):
     project: str
@@ -154,10 +164,20 @@ async def ingest_text(req: IngestRequest):
         holo = get_or_create_hologram(req.project)
         
         # Create glyph ID from path or hash
+        is_code = False
         if req.path:
             glyph_id = f"file:{req.path}"
+            # Check for code extensions
+            code_extensions = {'.py', '.js', '.ts', '.java', '.c', '.cpp', '.h', '.hpp', '.rs', '.go', '.rb', '.php', '.cs'}
+            if any(req.path.lower().endswith(ext) for ext in code_extensions):
+                is_code = True
         else:
             glyph_id = f"text:{abs(hash(req.text)) % 10**10}"
+        
+        # Add metadata for optimization
+        if is_code:
+            req.metadata["skip_nlp"] = True
+
         
         # Add to hologram with tier awareness
         trace_id = holo.add_text(
@@ -213,6 +233,42 @@ async def query_memory(req: QueryRequest):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ingest/code")
+async def ingest_code(req: IngestCodeRequest):
+    """
+    Ingest a source code file using the code mapping layer.
+    """
+    try:
+        holo = get_or_create_hologram(req.project)
+        count = holo.ingest_code(req.path)
+        return {
+             "status": "success",
+             "project": req.project,
+             "file": req.path,
+             "concepts_extracted": count
+        }
+    except Exception as e:
+         # Log error details for debugging
+         import traceback
+         traceback.print_exc()
+         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/query/code")
+async def query_code(req: QueryCodeRequest):
+    """
+    Query specifically for code concepts.
+    """
+    if req.project not in hologram_instances:
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        holo = hologram_instances[req.project]
+        results = holo.query_code(req.text, req.top_k)
+        return {"results": results}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/memory/{project}")
@@ -349,6 +405,7 @@ async def list_projects():
     }
 
 
+
 @app.delete("/project/{project}")
 async def delete_project(project: str):
     """Remove project from memory (does not delete saved files)."""
@@ -360,6 +417,35 @@ async def delete_project(project: str):
             status_code=404,
             detail=f"Project '{project}' not found"
         )
+
+
+@app.post("/reset/{project}")
+async def reset_memory(project: str, confirm: bool = False):
+    """
+    Destructively wipe memory for a project from disk and RAM.
+    """
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Must set confirm=true to wipe memory.")
+        
+    # 1. Unload from memory
+    if project in hologram_instances:
+        del hologram_instances[project]
+        
+    # 2. Delete from disk
+    from .config import Config
+    import shutil
+    import os
+    
+    project_dir = os.path.join(Config.storage.MEMORY_DIR, project)
+    
+    if os.path.exists(project_dir):
+        try:
+            shutil.rmtree(project_dir)
+            return {"status": "success", "detail": f"Memory for '{project}' erased."}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to delete directory: {str(e)}")
+    else:
+        return {"status": "success", "detail": f"No fresh memory found for '{project}' (already clean)."}
 
 
 # ============================================================================
