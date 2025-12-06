@@ -62,6 +62,21 @@ class EmbeddingConfig:
     DEVICE: str = "cuda" if os.getenv("HOLOGRAM_FORCE_CPU", "0") != "1" else "cpu"
 
 
+
+@dataclass
+class EvolutionConfig:
+    # Drift Thresholds
+    DRIFT_SMALL: float = 0.08      # Fuse (Weighted Average)
+    DRIFT_MEDIUM: float = 0.22     # Soft Fusion (Interpolation)
+    DRIFT_LARGE: float = 0.38      # Mitosis (Split)
+    
+    # Decay & Protections
+    OBSOLETE_DECAY: float = 0.60   # Forced decay factor for deprecated symbols
+    DECAY_RATE: float = 0.1        # Mass decay rate per deprecation step
+    Collision_THRESHOLD: float = 0.6  # Name similarity required for fusion
+    ROT_THRESHOLD: float = 0.5     # Max allowed divergence from original vector before warning/action
+
+
 class Config:
     """Centralized configuration with persistence support."""
     core = CoreConfig()
@@ -70,6 +85,8 @@ class Config:
     gravity = GravityConfig()
     coref = CorefConfig()
     embedding = EmbeddingConfig()
+    evolution = EvolutionConfig() # NEW
+
     
     # Track if loaded from global config
     _loaded_from_global: bool = False
@@ -78,7 +95,7 @@ class Config:
     def to_dict(cls) -> Dict[str, Any]:
         """Serialize all config sections to a flat dictionary."""
         result = {}
-        for section_name in ["core", "storage", "server", "gravity", "coref", "embedding"]:
+        for section_name in ["core", "storage", "server", "gravity", "coref", "embedding", "evolution"]:
             section = getattr(cls, section_name)
             for f in fields(section):
                 key = f"{section_name}.{f.name}"
@@ -98,6 +115,7 @@ class Config:
             "gravity": cls.gravity,
             "coref": cls.coref,
             "embedding": cls.embedding,
+            "evolution": cls.evolution,
         }
         
         for key, value in data.items():

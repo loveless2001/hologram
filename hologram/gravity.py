@@ -159,6 +159,12 @@ class Concept:
     
     # Cost Engine: Track previous vector for drift calculation
     previous_vec: Optional[np.ndarray] = None
+    
+    # Evolution Pipeline Fields
+    status: str = "active"
+    age: int = 0
+    original_vec: Optional[np.ndarray] = None
+    vector_history: List[np.ndarray] = field(default_factory=list) # Store last 3 vectors
 
 def is_protected_namespace(name: str) -> bool:
     """Check if concept name belongs to protected namespace."""

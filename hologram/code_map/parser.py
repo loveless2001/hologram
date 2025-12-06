@@ -60,12 +60,29 @@ class CodeParser:
                 # Span (1-indexed lines)
                 span = (node.lineno, node.end_lineno) if hasattr(node, "end_lineno") else (node.lineno, node.lineno)
                 
+                # Extract body text
+                body_text = ast.get_source_segment(source, node) or ""
+                
+                # Reconstruct signature (simplified)
+                signature = name
+                if kind in ("function", "async_function"):
+                    args = ast.unparse(node.args)
+                    signature = f"{name}({args})"
+                elif kind == "class":
+                    bases = [ast.unparse(b) for b in node.bases]
+                    if bases:
+                        signature = f"{name}({', '.join(bases)})"
+                    else:
+                        signature = name
+
                 definitions.append({
                     "type": kind,
                     "name": name,
                     "parents": parents,
                     "span": span,
                     "doc": get_docstring(node),
+                    "body_text": body_text,
+                    "signature": signature
                 })
 
         SymbolVisitor().visit(tree)

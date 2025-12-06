@@ -264,46 +264,29 @@ class Hologram:
 
     def ingest_code(self, file_path: str, add_to_field: bool = True):
         """
-        Ingest a source code file, extracting symbols and mapping them to concepts.
+        Ingest a source code file using the Evolution Pipeline.
         """
-        from .code_map.parser import CodeParser
-        from .code_map.extractor import SymbolExtractor
-        from .code_map.mapper import ConceptMapper
+        from .code_map.evolution import CodeEvolutionEngine
         
-        # 1. Parse
-        parser = CodeParser()
-        raw_nodes = parser.parse_file(file_path)
-        
-        # 2. Extract
-        extractor = SymbolExtractor()
-        concepts = extractor.extract(raw_nodes, file_path)
-        
-        # 3. Map & Store
-        mapper = ConceptMapper()
-        
-        # Define vectorizer callback using Manifold + Encoder
+        # Wrapper for embedding
         def vectorizer(text: str) -> np.ndarray:
-            return self.manifold.align_text(text, self.text_encoder)
+             return self.manifold.align_text(text, self.text_encoder)
+             
+        engine = CodeEvolutionEngine(self.store, vectorizer)
+        
+        # Ensure registry uses the same persistence path as store if possible, 
+        # or just a sidecar file. Engine defaults to "data/symbol_registry.json".
+        
+        count = engine.process_file(file_path)
+        
+        # Sync gravity field if needed (Engine updates concepts directly, 
+        # but if `add_to_field` logic was external, we might need to handle it.
+        # The Engine assumes it modifies self.field directly.)
+        
+        if self.field:
+            self.field.sim.step_dynamics()
             
-        for concept in concepts:
-            glyph, trace = mapper.map_concept(concept, vectorizer)
-            
-            # Add to store
-            self.store.upsert_glyph(glyph)
-            self.store.add_trace(trace)
-            self.store.link_trace(glyph.glyph_id, trace.trace_id)
-            
-            # Add to Gravity Field
-            if self.field and add_to_field:
-                # Use concept ID as the gravity node name
-                self.field.add(
-                    glyph.glyph_id,
-                    trace.vec,
-                    tier=1, # Code is domain knowledge
-                    project=self.project,
-                    origin="code_map"
-                )
-        return len(concepts)
+        return count
 
     # --- Read operations ---
     def recall_glyph(self, glyph_id: str):

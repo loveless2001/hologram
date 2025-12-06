@@ -24,6 +24,9 @@ class Trace:
     coref_map: Optional[Dict[str, str]] = None  # Map of resolved pronouns
     span: Optional[Tuple[int, int]] = None      # Code span (start_line, end_line)
     source_file: Optional[str] = None           # Path to source file
+    revision: Optional[str] = None              # Git commit hash or timestamp
+    status: str = "active"                      # "active" | "deprecated" | "revived"
+    parent_symbol_id: Optional[str] = None      # ID of parent scope/symbol
 
 
 @dataclass
@@ -107,6 +110,7 @@ class MemoryStore:
         self.vec_dim = vec_dim
         self.traces = {}
         self.glyphs = {}
+        self.symbol_registry = {}  # NEW: Registry for symbol identity tracking
         self.index = VectorIndex(vec_dim, use_gpu=None)
         self.sim = Gravity(dim=vec_dim)
         self.backend = backend
