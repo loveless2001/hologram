@@ -326,6 +326,99 @@ class Hologram:
         return sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
 
 
+    def search_with_drift(
+        self,
+        query: str,
+        top_k_traces: int = 10,
+        probe_steps: int = 8,
+    ) -> Dict[str, Any]:
+        """
+        Perform a dynamic retrieval using probe physics (Phase 4).
+        Returns:
+            {
+                "probe": Probe,
+                "tree": RetrievalTree,
+                "results": List[Dict]  # Ranked traces
+            }
+        """
+        # 1. Encode query via Manifold
+        qv = self.manifold.align_text(query, self.text_encoder)
+
+        if not self.field:
+            # Fallback to standard search if no gravity field
+            hits = self.store.search_traces(qv, top_k=top_k_traces)
+            results = []
+            for tid, s in hits:
+                t = self.store.get_trace(tid)
+                if t: results.append({"trace": t, "score": float(s)})
+            return {"probe": None, "tree": None, "results": results}
+
+        # 2. Run probe in gravity field
+        # We assume self.field.sim exposes run_probe (updated Gravity class)
+        probe = self.field.sim.run_probe(
+            vec=qv,
+            name=f"probe:{abs(hash(query))%10**10}",
+            max_steps=probe_steps,
+        )
+
+        # 3. Build retrieval tree
+        tree = self.field.sim.build_retrieval_tree(probe)
+
+        # 4. Pick final concept ids as anchors
+        concept_ids = [
+            nid for nid, node in tree.nodes.items()
+            if node.kind in ("concept", "glyph")
+        ]
+
+        # 5. Map concepts -> traces
+        # Traces are either direct text nodes (concept_id="trace:...") or linked via Glyphs
+        trace_scores: Dict[str, float] = {}
+
+        for cid in concept_ids:
+            node = tree.nodes[cid]
+            
+            # Case A: Concept IS a trace (e.g. text trace added as concept)
+            # We need to know if a concept ID corresponds to a trace ID.
+            # In store.py: "self.sim.add_concept(t.trace_id...)"
+            # So concept keys ARE trace IDs often.
+            
+            # Check if this concept ID exists as a trace
+            tr = self.store.get_trace(cid)
+            if tr:
+                trace_scores[cid] = max(trace_scores.get(cid, 0.0), node.score)
+            
+            # Case B: Concept is a Glyph -> get attached traces
+            if cid.startswith("glyph:"):
+                # Glyph ID is the part after "glyph:"
+                gid = cid.replace("glyph:", "")
+                glyph = self.store.get_glyph(gid)
+                if glyph:
+                    for tid in glyph.trace_ids:
+                        trace_scores[tid] = max(trace_scores.get(tid, 0.0), node.score)
+
+        # 6. Rank traces
+        ranked = sorted(
+            trace_scores.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:top_k_traces]
+
+        results = []
+        for tid, s in ranked:
+            tr = self.store.get_trace(tid)
+            if tr:
+                results.append({
+                    "trace": tr,
+                    "score": s,
+                })
+
+        # 7. Return both path + tree + traces
+        return {
+            "probe": probe,
+            "tree": tree,
+            "results": results,
+        }
+
     def retrieve(self, query: str) -> MemoryPacket:
         """
         Perform a dynamic retrieval using probe physics.

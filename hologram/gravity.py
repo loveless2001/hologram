@@ -4,7 +4,7 @@ import hashlib
 import threading
 import faiss
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Set
 import os
 
 try:
@@ -195,56 +195,48 @@ def can_interact(a: Concept, b: Concept) -> bool:
 
 
 @dataclass
+class ProbeStep:
+    """A single step in the probe's drift history."""
+    position: np.ndarray
+    neighbors: List[Tuple[str, float]]  # [(concept_name, sim)]
+    chosen: List[str]                   # ids actually used for force calc
+
+@dataclass
 class Probe:
     """A semantic probe that drifts through the Gravity Field."""
-    pos: np.ndarray
-    trajectory: List[np.ndarray] = field(default_factory=list)
-    velocity: np.ndarray = field(default_factory=lambda: np.zeros(0))  # Will be init to dim
+    name: str
+    vec: np.ndarray          # current position
+    mass: float = 0.1
+    history: List[ProbeStep] = field(default_factory=list)
+    previous_vec: Optional[np.ndarray] = None # For inertia calculation
+    
+    # Legacy fields support (optional, can be deprecated)
+    # trajectory: List[np.ndarray] = field(default_factory=list) 
+    # But new design uses history[].position
 
-    def __post_init__(self):
-        if not self.trajectory:
-            self.trajectory.append(self.pos.copy())
+    @property
+    def pos(self) -> np.ndarray:
+        return self.vec
+        
+    @property
+    def velocity(self) -> np.ndarray:
+        if self.previous_vec is None:
+            return np.zeros_like(self.vec)
+        return self.vec - self.previous_vec
 
-    def step(self, gravity: 'Gravity', step_size: float = 0.1):
-        """
-        Perform one step of drift based on gravitational pull of concepts.
-        p_{t+1} = norm(p_t + sum(sim(p_t, c_i) * m_i * unit(c_i - p_t)))
-        """
-        force = np.zeros_like(self.pos)
-        
-        # Calculate aggregate force from all concepts
-        # Optimization: In a real large-scale system, we'd use FAISS to find nearest neighbors first
-        # For now, we iterate all (or use a random subset if too large)
-        
-        # We can use matrix operations if we have gravity.get_matrix()
-        # But we need masses too.
-        
-        for name, concept in gravity.concepts.items():
-            # Direction: concept -> probe (attraction pulls probe TO concept)
-            # vector from probe to concept
-            direction = concept.vec - self.pos
-            dist = np.linalg.norm(direction) + 1e-8
-            unit_dir = direction / dist
-            
-            # Similarity (Cosine) acts as a "relevance gate"
-            # If they are orthogonal, pull is weak even if mass is high?
-            # Gravity usually depends on distance (1/r^2). 
-            # In cosine space, distance is (1-cos).
-            # Let's use the formula: Force ~ Mass * Similarity * Direction
-            
-            sim = cosine(self.pos, concept.vec)
-            
-            if sim < 0.1: continue # Ignore distant concepts
-            
-            # Pull = Mass * Sim
-            pull = concept.mass * sim
-            
-            force += pull * unit_dir
-            
-        # Update position
-        self.pos += step_size * force
-        self.pos /= (np.linalg.norm(self.pos) + 1e-8)
-        self.trajectory.append(self.pos.copy())
+@dataclass
+class RetrievalNode:
+    id: str                    # concept or glyph id, or "probe"
+    kind: str                  # "probe" | "concept" | "glyph"
+    mass: float
+    score: float               # e.g. similarity to final probe position
+    children: List[str] = field(default_factory=list)
+    meta: Dict = field(default_factory=dict)
+
+@dataclass
+class RetrievalTree:
+    root_id: str
+    nodes: Dict[str, RetrievalNode]  # id -> node
 
 
 @dataclass
@@ -1064,6 +1056,240 @@ class Gravity:
                     self.relations[(parts[0], parts[1])] = v
 
 
+
+    # --- Probe Physics ---
+    def nearest_concepts(self, vec: np.ndarray, top_k: int = 10) -> List[Tuple[str, float]]:
+        """
+        Find nearest concepts using mass-weighted similarity.
+        sim = cosine(vec, c.vec) * log(1 + c.mass)
+        """
+        if not self.concepts:
+            return []
+            
+        # Filter for valid attractors (Tier 1 Domain or Glyphs)
+        # Optimization: Maintain a separate list/matrix for these
+        candidates = [
+            n for n in self.concepts.keys() 
+            if self.concepts[n].tier == TIER_DOMAIN or self.concepts[n].tier == TIER_META 
+            or n.startswith("glyph:")
+        ]
+        
+        if not candidates:
+            return []
+
+        # Brute force for physics accuracy (taking mass into account)
+        # FAISS search is purely geometric (cosine), so we'd need to re-rank.
+        
+        vec = vec / (np.linalg.norm(vec) + 1e-8)
+        
+        results = []
+        for name in candidates:
+            c = self.concepts[name]
+            # Geometric similarity
+            cos_sim = float(np.dot(vec, c.vec))
+            
+            # Mass-weighted similarity
+            # High mass nodes pull from further away
+            weighted_sim = cos_sim * np.log1p(c.mass)
+            
+            results.append((name, weighted_sim))
+            
+        # Sort by weighted score
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results[:top_k]
+
+    def step_probe(
+        self,
+        probe: Probe,
+        top_k: int = 10,
+        min_sim: float = 0.2, # Minimum weighted similarity to attract
+        alpha: float = 0.4,   # Drift rate (0.3 - 0.6)
+        beta: float = 0.15,   # Inertia/Damping (0.1 - 0.2)
+    ) -> Probe:
+        """
+        Execute one physics step for the probe.
+        new_vec = normalize(old_vec + alpha * attraction - beta * inertia)
+        """
+        # 1. Find massive neighbors
+        neighbors = self.nearest_concepts(probe.vec, top_k=top_k)
+        
+        # Filter by minimum attraction
+        used = [(name, sim) for name, sim in neighbors if sim >= min_sim]
+        
+        if not used:
+            # No attraction, just drift or stop?
+            # Record step with no movement
+            probe.history.append(ProbeStep(
+                position=probe.vec.copy(),
+                neighbors=neighbors,
+                chosen=[]
+            ))
+            return probe
+
+        # 2. Accumulate Attraction Force
+        attraction = np.zeros_like(probe.vec, dtype=np.float32)
+        total_weight = 0.0
+
+        for name, weight in used:
+            c = self.concepts[name]
+            # Weight already includes mass factor from nearest_concepts
+            # But standard gravity is Force ~ Mass * Direction.
+            # Here 'weight' is the scalar magnitude of importance.
+            
+            # Direction vector
+            direction = c.vec - probe.vec
+            # Normalize direction? 
+            # Or assume c.vec and probe.vec are unit, direction length matters?
+            # Standard centroid logic: weighted sum of vectors.
+            
+            w = max(weight, 0.0)
+            total_weight += w
+            attraction += w * (c.vec - probe.vec) # Pull towards concept
+
+        if total_weight > 0:
+             attraction /= (total_weight + 1e-8)
+
+        # 3. Calculate Inertia (Velocity)
+        inertia = np.zeros_like(probe.vec)
+        if probe.previous_vec is not None:
+            inertia = probe.vec - probe.previous_vec
+
+        # 4. Update Position
+        # new_vec = normalize(old_vec + alpha * attraction - beta * inertia)
+        # Note: Inertia usually *keeps* you moving in same direction. 
+        # Damping *opposes* motion.
+        # If we want DAMPING (friction), we subtract velocity: - beta * velocity.
+        # If we want MOMENTUM, we add velocity: + beta * velocity.
+        # User said: "beta ~ 0.1-0.2 reduces oscillation" -> implies damping.
+        # Formula given: "- beta * inertia".
+        
+        new_pos = probe.vec + (alpha * attraction) - (beta * inertia)
+        new_pos /= (np.linalg.norm(new_pos) + 1e-8)
+
+        # Update state
+        probe.previous_vec = probe.vec.copy()
+        probe.vec = new_pos
+        
+        probe.history.append(ProbeStep(
+            position=probe.vec.copy(), # Store NEW position
+            neighbors=neighbors,
+            chosen=[name for name, _ in used]
+        ))
+        
+        return probe
+
+    def run_probe(
+        self,
+        vec: np.ndarray,
+        name: str = "probe",
+        max_steps: int = 8,
+        tol: float = 1e-3,
+        top_k: int = 10,
+        min_sim: float = 0.1, # Lower threshold suitable for weighted sim
+    ) -> Probe:
+        """Run probe simulation until convergence."""
+        probe = Probe(
+            name=name, 
+            vec=vec.astype("float32"),
+            previous_vec=None
+        )
+        # Initial state recording
+        # probe.history.append(...) ? No, steps record the transitions.
+
+        for _ in range(max_steps):
+            prev_vec = probe.vec.copy()
+            self.step_probe(probe, top_k=top_k, min_sim=min_sim)
+            
+            # Check convergence
+            delta = np.linalg.norm(probe.vec - prev_vec)
+            if delta < tol:
+                break
+                
+        return probe
+
+    def build_retrieval_tree(
+        self, 
+        probe: Probe, 
+        radius: float = 0.65,
+        max_concepts: int = 32
+    ) -> RetrievalTree:
+        """
+        Construct a retrieval tree based on Gravitational Radius.
+        Include concepts where cosine(c, probe_pos) > radius.
+        """
+        nodes: Dict[str, RetrievalNode] = {}
+        root_id = probe.name
+        
+        # Root Node
+        nodes[root_id] = RetrievalNode(
+            id=root_id,
+            kind="probe",
+            mass=probe.mass,
+            score=1.0,
+            children=[],
+            meta={"steps": len(probe.history)}
+        )
+        
+        # 1. Collect all candidates visited or nearby final position
+        # We scan all concepts (or FAISS search) to find those within radius of FINAL position
+        # AND maybe those high-mass ones encountered along the path?
+        # User said: "For each node visited: neighbors = { n | cosine(n, probe_vec) > radius }"
+        # This implies we check radius at EACH step? Or just the final?
+        # "This creates a layered tree... This is how you produce a semantic region"
+        # Let's collect from ALL steps to capture the "Path".
+        
+        candidate_scores = {} # name -> max_similarity
+        
+        # Check neighborhoods of all history points
+        for step in probe.history:
+            # We can use the neighbors found during step (mass-weighted)
+            # Or re-scan for geometric radius?
+            # The user specified: "neighbors = { n | cosine(n, probe_vec) > radius }"
+            # This is GEOMETRIC cosine, not mass-weighted for the *Structure*.
+            
+            # Optimization: Use FAISS search for radius query
+            # But we are inside Gravity (no FAISS index guarantee).
+            # We'll use brute force on the active set if small, or reuse step neighbors.
+            
+            pos = step.position
+            
+            for name, c in self.concepts.items():
+                if name.startswith("system:"): continue # Optional
+                
+                sim = cosine(pos, c.vec)
+                if sim > radius:
+                    candidate_scores[name] = max(candidate_scores.get(name, 0.0), sim)
+
+        # Sort by similarity
+        sorted_candidates = sorted(candidate_scores.items(), key=lambda x: x[1], reverse=True)
+        top_candidates = sorted_candidates[:max_concepts]
+        
+        # Build Nodes
+        for name, sim in top_candidates:
+            c = self.concepts[name]
+            kind = "glyph" if name.startswith("glyph:") else "concept"
+            
+            node = RetrievalNode(
+                id=name,
+                kind=kind,
+                mass=c.mass,
+                score=sim,
+                children=[],
+                meta={"count": c.count}
+            )
+            nodes[name] = node
+            
+            # Attach to root for now (flat tree? or hierarchical?)
+            # "Query - Concept A - Concept A2..."
+            # Simple version: All connect to Root.
+            # Better version: Connect to nearest parent?
+            # For Phase 4 MVP, flat connection to Probe Root is acceptable, 
+            # effectively a "Galaxy" around the probe.
+            nodes[root_id].children.append(name)
+            
+        return RetrievalTree(root_id=root_id, nodes=nodes)
+
+
 # --- Field wrapper (FAISS + Gravity) ---
 class GravityField:
     def __init__(self, dim=512, use_faiss=True):
@@ -1115,15 +1341,20 @@ class GravityField:
         self.sim.step_decay(steps)
 
     def spawn_probe(self, vec: np.ndarray) -> Probe:
-        """Spawn a new probe at the given vector."""
+        """Spawn a new probe. Wraps Gravity.run_probe logic but initializes object."""
+        # This was legacy. Now we let Gravity.run_probe create it.
+        # But to maintain API slightly -> return a fresh Probe object
         vec = vec.astype("float32")
         vec /= (np.linalg.norm(vec) + 1e-8)
-        return Probe(pos=vec, velocity=np.zeros_like(vec))
+        return Probe(name=f"probe:{abs(hash(str(vec.data)))}", vec=vec)
 
     def simulate_trajectory(self, probe: Probe, steps: int = 5) -> Probe:
-        """Simulate probe drift for N steps."""
+        """
+        Simulate probe drift.
+        Delegates to Gravity.step_probe.
+        """
         for _ in range(steps):
-            probe.step(self.sim)
+             self.sim.step_probe(probe)
         return probe
 
     def check_mitosis(self, name: str) -> bool:

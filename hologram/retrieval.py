@@ -19,7 +19,14 @@ def extract_local_field(field: GravityField, probe: Probe, top_k: int = 10) -> D
         return {"nodes": [], "edges": [], "glyphs": []}
 
     final_pos = probe.pos
-    trajectory = probe.trajectory
+    # Adapt to new Probe history structure
+    if hasattr(probe, "history") and probe.history:
+        trajectory = [step.position for step in probe.history]
+        # Ensure final pos is included? History usually tracks steps.
+    elif hasattr(probe, "trajectory"):
+        trajectory = probe.trajectory
+    else:
+        trajectory = [final_pos]
 
     # 1. Identify Core Concepts (nearest to final position)
     # We use the field's search method (FAISS or brute force)

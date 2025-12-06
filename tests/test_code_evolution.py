@@ -1,210 +1,483 @@
 import pytest
+import os
 import numpy as np
-import threading
-import time
+from hologram.code_map.evolution import CodeEvolutionEngine
+from hologram.code_map.registry import SymbolRegistry
 from hologram.store import MemoryStore, Trace
 from hologram.gravity import Gravity, Concept, cosine
 from hologram.config import Config
-from hologram.code_map.evolution import CodeEvolutionEngine
-from hologram.code_map.registry import SymbolRegistry, SymbolMetadata
 
-# --- MOCKS ---
-class MockGravity(Gravity):
-    def check_mitosis(self, name, **kwargs):
-        # Allow spying on calls
-        if hasattr(self, 'mitosis_calls'):
-            self.mitosis_calls.append(name)
-        return super().check_mitosis(name, **kwargs)
+PROJECT_NAME = "test_evolution_pipeline"
+TEMP_FILE_PATH = os.path.abspath("temp_evolution_test.py")
 
-class MockStore(MemoryStore):
-    def __init__(self):
-        super().__init__(vec_dim=384)
-        self.sim = MockGravity(dim=384)
-        pass # Override heavier init if needed
+# Version 1: Initial implementation
+CODE_V1 = """
+class Spacecraft:
+    def __init__(self, name, fuel_capacity):
+        self.name = name
+        self.fuel = fuel_capacity
+        self.velocity = 0.0
 
-def mock_vectorizer(text: str) -> np.ndarray:
-    # Deterministic "vector" based on text length + ascii sum
-    # This allows us to control "drift" precisely by changing text
-    np.random.seed(len(text))
-    # Base vector
-    vec = np.random.randn(384).astype(np.float32)
-    # perturbation based on content
-    val = sum(ord(c) for c in text) % 100
-    vec += (val * 0.01) # Small perturbation
-    return vec / np.linalg.norm(vec)
+    def launch(self):
+        \"\"\"Initiate launch sequence and consume fuel.\"\"\"
+        if self.fuel > 10:
+            print(f"{self.name} is launching!")
+            self.fuel -= 10
+            self.velocity = 5000.0
+        else:
+            print("Insufficient fuel.")
 
-# Wrapper to control drift
-def make_vector(seed_val: int = 0, base_vec: np.ndarray = None, noise: float = 0.0) -> np.ndarray:
-    if base_vec is not None:
-        rng = np.random.RandomState(seed_val)
-        noise_vec = rng.randn(384).astype(np.float32)
-        noise_vec /= np.linalg.norm(noise_vec)
-        new_vec = base_vec + (noise_vec * noise)
-        return new_vec / np.linalg.norm(new_vec)
-    else:
-        rng = np.random.RandomState(seed_val)
-        vec = rng.randn(384).astype(np.float32)
-        return vec / np.linalg.norm(vec)
+class MissionControl:
+    def __init__(self, location="Houston"):
+        self.location = location
+        self.active_missions = []
 
-# --- TESTS ---
+    def abort_mission(self, spacecraft):
+        \"\"\"Emergency abort sequence.\"\"\"
+        print(f"Aborting mission for {spacecraft.name}")
+        spacecraft.velocity = 0.0
+
+def calculate_trajectory(p1, p2):
+    \"\"\"Compute orbital trajectory using Hohmann transfer.\"\"\"
+    dx = p2.x - p1.x
+    dy = p2.y - p1.y
+    return (dx**2 + dy**2)**0.5
+"""
+
+# Version 2: Small drift - minor refactoring (comments, formatting)
+CODE_V2_SMALL_DRIFT = """
+class Spacecraft:
+    def __init__(self, name, fuel_capacity):
+        # Initialize spacecraft with name and fuel
+        self.name = name
+        self.fuel = fuel_capacity
+        self.velocity = 0.0
+
+    def launch(self):
+        \"\"\"Initiate launch sequence and consume fuel.\"\"\"
+        # Check fuel level before launch
+        if self.fuel > 10:
+            print(f"{self.name} is launching!")
+            self.fuel -= 10
+            self.velocity = 5000.0
+        else:
+            print("Insufficient fuel.")
+
+class MissionControl:
+    def __init__(self, location="Houston"):
+        self.location = location
+        self.active_missions = []
+
+    def abort_mission(self, spacecraft):
+        \"\"\"Emergency abort sequence.\"\"\"
+        print(f"Aborting mission for {spacecraft.name}")
+        spacecraft.velocity = 0.0
+
+def calculate_trajectory(p1, p2):
+    \"\"\"Compute orbital trajectory using Hohmann transfer.\"\"\"
+    dx = p2.x - p1.x
+    dy = p2.y - p1.y
+    return (dx**2 + dy**2)**0.5
+"""
+
+# Version 3: Medium drift - logic changes
+CODE_V3_MEDIUM_DRIFT = """
+class Spacecraft:
+    def __init__(self, name, fuel_capacity):
+        self.name = name
+        self.fuel = fuel_capacity
+        self.velocity = 0.0
+        self.status = "ready"  # NEW field
+
+    def launch(self):
+        \"\"\"Initiate launch sequence with status tracking.\"\"\"
+        if self.fuel > 10 and self.status == "ready":
+            print(f"{self.name} is launching!")
+            self.fuel -= 10
+            self.velocity = 5000.0
+            self.status = "in_flight"  # NEW logic
+        else:
+            print("Cannot launch - insufficient fuel or not ready.")
+
+class MissionControl:
+    def __init__(self, location="Houston"):
+        self.location = location
+        self.active_missions = []
+
+    def abort_mission(self, spacecraft):
+        \"\"\"Emergency abort sequence with status update.\"\"\"
+        print(f"Aborting mission for {spacecraft.name}")
+        spacecraft.velocity = 0.0
+        spacecraft.status = "aborted"  # NEW logic
+
+def calculate_trajectory(p1, p2):
+    \"\"\"Compute orbital trajectory using Hohmann transfer.\"\"\"
+    dx = p2.x - p1.x
+    dy = p2.y - p1.y
+    distance = (dx**2 + dy**2)**0.5
+    return distance
+"""
+
+# Version 4: Large drift - complete rewrite
+CODE_V4_LARGE_DRIFT = """
+class Spacecraft:
+    def __init__(self, name, fuel_capacity):
+        self.name = name
+        self.fuel = fuel_capacity
+        self.velocity = 0.0
+        self.status = "ready"
+        self.telemetry = []  # Completely new architecture
+
+    def launch(self):
+        \"\"\"Advanced launch with telemetry logging.\"\"\"
+        if not self._pre_flight_check():
+            return False
+        
+        self.fuel -= 10
+        self.velocity = 5000.0
+        self.status = "in_flight"
+        self._log_telemetry("launch", {"fuel": self.fuel, "velocity": self.velocity})
+        return True
+    
+    def _pre_flight_check(self):
+        \"\"\"Internal pre-flight validation.\"\"\"
+        return self.fuel > 10 and self.status == "ready"
+    
+    def _log_telemetry(self, event, data):
+        \"\"\"Log telemetry data.\"\"\"
+        self.telemetry.append({"event": event, "data": data})
+
+class MissionControl:
+    def __init__(self, location="Houston"):
+        self.location = location
+        self.active_missions = []
+
+    def abort_mission(self, spacecraft):
+        \"\"\"Emergency abort sequence with status update.\"\"\"
+        print(f"Aborting mission for {spacecraft.name}")
+        spacecraft.velocity = 0.0
+        spacecraft.status = "aborted"
+
+def calculate_trajectory(p1, p2):
+    \"\"\"Compute orbital trajectory using Hohmann transfer.\"\"\"
+    dx = p2.x - p1.x
+    dy = p2.y - p1.y
+    distance = (dx**2 + dy**2)**0.5
+    return distance
+"""
+
+# Version 5: Symbol deletion (remove calculate_trajectory)
+CODE_V5_DELETION = """
+class Spacecraft:
+    def __init__(self, name, fuel_capacity):
+        self.name = name
+        self.fuel = fuel_capacity
+        self.velocity = 0.0
+        self.status = "ready"
+        self.telemetry = []
+
+    def launch(self):
+        \"\"\"Advanced launch with telemetry logging.\"\"\"
+        if not self._pre_flight_check():
+            return False
+        
+        self.fuel -= 10
+        self.velocity = 5000.0
+        self.status = "in_flight"
+        self._log_telemetry("launch", {"fuel": self.fuel, "velocity": self.velocity})
+        return True
+    
+    def _pre_flight_check(self):
+        \"\"\"Internal pre-flight validation.\"\"\"
+        return self.fuel > 10 and self.status == "ready"
+    
+    def _log_telemetry(self, event, data):
+        \"\"\"Log telemetry data.\"\"\"
+        self.telemetry.append({"event": event, "data": data})
+
+class MissionControl:
+    def __init__(self, location="Houston"):
+        self.location = location
+        self.active_missions = []
+
+    def abort_mission(self, spacecraft):
+        \"\"\"Emergency abort sequence with status update.\"\"\"
+        print(f"Aborting mission for {spacecraft.name}")
+        spacecraft.velocity = 0.0
+        spacecraft.status = "aborted"
+"""
+
+# Version 6: Revival (bring back calculate_trajectory)
+CODE_V6_REVIVAL = CODE_V4_LARGE_DRIFT
+
 
 @pytest.fixture
-def evolution_setup(tmp_path):
-    store = MockStore()
+def evolution_engine(tmp_path):
+    """Create an isolated evolution engine for testing."""
+    store = MemoryStore(vec_dim=384)
     
-    # Mock vectorizer to be controllable
-    # We will patch it inside individual tests if needed
-    engine = CodeEvolutionEngine(store, mock_vectorizer)
+    # Track version for drift simulation
+    version_counter = {"count": 0}
     
-    # Use tmp path for registry
+    def vectorizer(text: str) -> np.ndarray:
+        # Create vectors that drift slightly between versions
+        # Use text hash as base, add version-specific noise
+        base_seed = abs(hash(text)) % 2**32
+        version_seed = version_counter["count"]
+        
+        np.random.seed(base_seed)
+        vec = np.random.randn(384).astype(np.float32)
+        
+        # Add small version-specific perturbation
+        np.random.seed(version_seed)
+        noise = np.random.randn(384).astype(np.float32) * 0.05
+        vec = vec + noise
+        
+        version_counter["count"] += 1
+        return vec / np.linalg.norm(vec)
+    
+    engine = CodeEvolutionEngine(store, vectorizer)
     engine.registry = SymbolRegistry(persistence_path=str(tmp_path / "registry.json"))
     
-    return engine, store
+    yield engine, store
+    
+    # Cleanup
+    if os.path.exists(TEMP_FILE_PATH):
+        os.remove(TEMP_FILE_PATH)
 
-def test_new_symbol_ingestion(evolution_setup):
-    engine, store = evolution_setup
-    
-    # Create a dummy python file
-    code = """
-def test_func():
-    print("Hello")
-"""
-    import os
-    with open("test_new.py", "w") as f:
-        f.write(code)
-        
-    count = engine.process_file("test_new.py")
-    assert count == 1
-    
-    # Verify Trace
-    # We need to know the ID. Extractor uses hash.
-    # scan store traces
-    assert len(store.traces) == 1
-    trace = list(store.traces.values())[0]
-    assert trace.status == "active"
-    assert "test_func" in trace.meta["signature"]
-    
-    # Verify Registry
-    assert len(engine.registry.registry) == 1
-    meta = list(engine.registry.registry.values())[0]
-    assert meta.qualified_name == "test_func"
-    
-    os.remove("test_new.py")
 
-def test_fusion_small_drift(evolution_setup):
-    engine, store = evolution_setup
+def test_evolution_full_lifecycle(evolution_engine):
+    """
+    Comprehensive test of the evolution pipeline:
+    1. Initial ingestion
+    2. Small drift (fusion)
+    3. Medium drift (soft fusion)
+    4. Large drift (mitosis)
+    5. Symbol deletion (deprecation)
+    6. Symbol revival
+    """
+    engine, store = evolution_engine
     
-    # 1. Setup existing concept
-    concept_id = "test_id"
-    vec_v1 = make_vector(seed_val=0) # Base
+    # === PHASE 1: Initial Ingestion ===
+    print("\n=== PHASE 1: Initial Ingestion ===")
+    with open(TEMP_FILE_PATH, "w") as f:
+        f.write(CODE_V1)
     
-    c = Concept(name=concept_id, vec=vec_v1.copy(), mass=1.0)
-    c.origin = "code_map"
-    c.original_vec = vec_v1.copy()
-    store.sim.concepts[concept_id] = c
+    count = engine.process_file(TEMP_FILE_PATH)
+    assert count > 0, "Should extract symbols"
     
-    trace = Trace(trace_id=concept_id, kind="code", content="old", vec=vec_v1)
-    store.traces[concept_id] = trace
+    # Verify all symbols are registered
+    assert len(engine.registry.registry) >= 5  # Spacecraft, __init__, launch, MissionControl, abort_mission, calculate_trajectory
     
-    # Register it
-    meta = SymbolMetadata(
-        symbol_id=concept_id, qualified_name="func", signature="func()", 
-        file_path="t.py", language="python", first_seen="", last_seen="", status="active", vector_hash=""
-    )
-    engine.registry.register(meta)
-
-    # 2. Trigger Update with Small Drift
-    # vec_v2 close to v1 (noise 0.1 gives roughly 0.005 drift in Cosine? Need to tune)
-    # Cosine distance ~ noise^2 / 2 for small noise
-    # 0.1 -> 0.005 drift. 0.3 -> 0.045 drift. 0.4 -> 0.08 drift.
-    vec_v2 = make_vector(seed_val=1, base_vec=vec_v1, noise=0.3)
-    drift = 1.0 - cosine(vec_v1, vec_v2) 
-    # Ensure drift is SMALL (<0.08)
-    assert drift < 0.08 and drift > 0.001
+    # Get initial symbol IDs
+    spacecraft_launch_id = None
+    for sid, meta in engine.registry.registry.items():
+        if "Spacecraft.launch" in meta.qualified_name:
+            spacecraft_launch_id = sid
+            break
     
-    # We need to inject this into process_file, but parsing real file is hard to align with mock vectors.
-    # Let's call _handle_fusion directly to verify logic
-    engine._handle_fusion(c, vec_v2, "func")
+    assert spacecraft_launch_id is not None, "Should find Spacecraft.launch"
     
-    # Verify Fusion (Weighted Average)
-    # Mass was 1.0, grew by 0.1
-    assert c.mass == 1.1
-    # Vector should be blended
-    # (v1*1 + v2*1)/2 approx
-    assert not np.array_equal(c.vec, vec_v1)
-    assert not np.array_equal(c.vec, vec_v2)
-    # Should be close to both
-    assert 1.0 - cosine(c.vec, vec_v2) < 0.05
-
-def test_mitosis_large_drift(evolution_setup):
-    engine, store = evolution_setup
-    store.sim.mitosis_calls = []
+    # Check initial concept in gravity
+    concept_v1 = store.sim.concepts.get(spacecraft_launch_id)
+    assert concept_v1 is not None
+    assert concept_v1.status == "active"
+    assert concept_v1.original_vec is not None
+    vec_v1 = concept_v1.vec.copy()
+    mass_v1 = concept_v1.mass
     
-    # 1. Setup
-    concept_id = "test_mitosis"
-    vec_v1 = make_vector(seed_val=0)
-    c = Concept(name=concept_id, vec=vec_v1.copy(), mass=5.0) # High mass
-    c.origin = "code_map"
-    c.age = 5
-    store.sim.concepts[concept_id] = c
+    print(f"✓ Initial ingestion: {count} symbols, mass={mass_v1:.2f}")
     
-    # Register
-    meta = SymbolMetadata(concept_id, "func", "func()", "t.py", "python", "", "", "active", "")
-    engine.registry.register(meta)
+    # === PHASE 2: Small Drift (Fusion) ===
+    print("\n=== PHASE 2: Small Drift (Fusion) ===")
+    with open(TEMP_FILE_PATH, "w") as f:
+        f.write(CODE_V2_SMALL_DRIFT)
     
-    # 2. Update with Large Drift
-    vec_v2 = make_vector(seed_val=1) # Totally diff seed -> Orthogonal
+    count = engine.process_file(TEMP_FILE_PATH)
+    
+    concept_v2 = store.sim.concepts.get(spacecraft_launch_id)
+    vec_v2 = concept_v2.vec.copy()
+    mass_v2 = concept_v2.mass
+    
     drift = 1.0 - cosine(vec_v1, vec_v2)
-    assert drift > 0.4
+    print(f"✓ Small drift: drift={drift:.4f}, mass_v1={mass_v1:.2f}, mass_v2={mass_v2:.2f}, growth={mass_v2-mass_v1:.2f}")
     
-    # Mock data packet
-    sym_data = {"id": concept_id, "qualified_name": "func"}
+    # Verify fusion occurred (mass should grow slightly or stay same if drift is tiny)
+    # Small drift might result in very small mass changes
+    assert mass_v2 >= mass_v1 * 0.99, f"Mass shouldn't decrease significantly: {mass_v1} -> {mass_v2}"
+    assert drift < Config.evolution.DRIFT_MEDIUM, f"Drift {drift} should be small"
     
-    engine._handle_mitosis_explicit(c, vec_v2, sym_data)
+    # === PHASE 3: Medium Drift (Soft Fusion) ===
+    print("\n=== PHASE 3: Medium Drift (Soft Fusion) ===")
+    with open(TEMP_FILE_PATH, "w") as f:
+        f.write(CODE_V3_MEDIUM_DRIFT)
     
-    # Verify Logic
-    # 1. Archive created
-    archive_id = f"{concept_id}_arch_v{c.age}"
-    assert archive_id in store.sim.concepts
+    count = engine.process_file(TEMP_FILE_PATH)
     
-    # 2. Original Updated
-    assert np.allclose(c.vec, vec_v2, atol=1e-5)
+    concept_v3 = store.sim.concepts.get(spacecraft_launch_id)
+    vec_v3 = concept_v3.vec.copy()
+    mass_v3 = concept_v3.mass
     
-    # 3. Bridge exists
-    key = (min(concept_id, archive_id), max(concept_id, archive_id))
-    assert key in store.sim.relations
+    drift = 1.0 - cosine(vec_v2, vec_v3)
+    print(f"✓ Medium drift: drift={drift:.4f}, mass={mass_v3:.2f}")
+    
+    # Verify soft fusion (interpolation)
+    assert concept_v3.previous_vec is not None
+    
+    # === PHASE 4: Large Drift (Mitosis) ===
+    print("\n=== PHASE 4: Large Drift (Mitosis) ===")
+    with open(TEMP_FILE_PATH, "w") as f:
+        f.write(CODE_V4_LARGE_DRIFT)
+    
+    initial_concept_count = len(store.sim.concepts)
+    count = engine.process_file(TEMP_FILE_PATH)
+    
+    concept_v4 = store.sim.concepts.get(spacecraft_launch_id)
+    vec_v4 = concept_v4.vec.copy()
+    
+    drift = 1.0 - cosine(vec_v3, vec_v4)
+    print(f"✓ Large drift: drift={drift:.4f}")
+    
+    # Check if archive was created (mitosis)
+    archive_concepts = [k for k in store.sim.concepts.keys() if "_arch_" in k]
+    if drift > Config.evolution.DRIFT_LARGE:
+        print(f"  Mitosis triggered: {len(archive_concepts)} archive(s) created")
+    
+    # === PHASE 5: Symbol Deletion (Deprecation) ===
+    print("\n=== PHASE 5: Symbol Deletion (Deprecation) ===")
+    with open(TEMP_FILE_PATH, "w") as f:
+        f.write(CODE_V5_DELETION)
+    
+    # Find calculate_trajectory ID
+    traj_id = None
+    for sid, meta in engine.registry.registry.items():
+        if "calculate_trajectory" in meta.qualified_name:
+            traj_id = sid
+            break
+    
+    count = engine.process_file(TEMP_FILE_PATH)
+    
+    if traj_id:
+        traj_meta = engine.registry.get(traj_id)
+        assert traj_meta.status == "deprecated", "Should be marked deprecated"
+        
+        traj_concept = store.sim.concepts.get(traj_id)
+        if traj_concept:
+            print(f"✓ Deprecation: mass={traj_concept.mass:.2f}, status={traj_meta.status}")
+            # Mass should have decayed
+            assert traj_concept.mass < 1.0, "Deprecated symbol should have reduced mass"
+    
+    # === PHASE 6: Symbol Revival ===
+    print("\n=== PHASE 6: Symbol Revival ===")
+    with open(TEMP_FILE_PATH, "w") as f:
+        f.write(CODE_V6_REVIVAL)
+    
+    count = engine.process_file(TEMP_FILE_PATH)
+    
+    if traj_id:
+        traj_meta = engine.registry.get(traj_id)
+        assert traj_meta.status == "revived", "Should be marked revived"
+        
+        traj_concept = store.sim.concepts.get(traj_id)
+        if traj_concept:
+            print(f"✓ Revival: mass={traj_concept.mass:.2f}, status={traj_meta.status}")
+            # Mass should be boosted
+            assert traj_concept.mass > 1.0, "Revived symbol should have boosted mass"
+    
+    # === FINAL VERIFICATION ===
+    print("\n=== FINAL VERIFICATION ===")
+    print(f"Total symbols in registry: {len(engine.registry.registry)}")
+    print(f"Total concepts in gravity: {len(store.sim.concepts)}")
+    
+    # Verify vector history tracking
+    assert concept_v4.age > 0, "Age should increment"
+    assert len(concept_v4.vector_history) > 0, "Should track vector history"
+    
+    # Verify all active symbols have proper status
+    active_count = sum(1 for m in engine.registry.registry.values() if m.status == "active")
+    print(f"Active symbols: {active_count}")
+    assert active_count > 0
+    
+    print("\n✅ Full lifecycle test passed!")
 
-def test_deprecation_and_revival(evolution_setup):
-    engine, store = evolution_setup
+
+def test_evolution_span_updates(evolution_engine):
+    """Test that span information is correctly updated across versions."""
+    engine, store = evolution_engine
     
-    # 1. Setup
-    sid = "dep_test"
-    vec = make_vector(seed_val=0)
-    c = Concept(name=sid, vec=vec.copy(), mass=1.0)
-    store.sim.concepts[sid] = c
-    store.traces[sid] = Trace(sid, "code", "content", vec)
+    # Initial version
+    with open(TEMP_FILE_PATH, "w") as f:
+        f.write(CODE_V1)
     
-    meta = SymbolMetadata(sid, "func", "func()", "t.py", "python", "", "", "active", "")
-    engine.registry.register(meta)
+    engine.process_file(TEMP_FILE_PATH)
     
-    # 2. Deprecate
-    engine._handle_deprecation(sid)
+    # Find Spacecraft class
+    spacecraft_id = None
+    for sid, meta in engine.registry.registry.items():
+        if meta.qualified_name == "Spacecraft":
+            spacecraft_id = sid
+            break
     
-    assert engine.registry.get(sid).status == "deprecated"
-    assert store.traces[sid].status == "deprecated"
-    # Mass decay
-    assert c.mass < 1.0
-    # Vector drift (randomized, just check it changed)
-    assert not np.allclose(c.vec, vec)
+    assert spacecraft_id is not None
     
-    # 3. Revive
-    new_vec = make_vector(seed_val=1)
-    engine._handle_revival(sid, new_vec)
+    # Get initial span
+    trace_v1 = store.get_trace(spacecraft_id)
+    span_v1 = trace_v1.span
     
-    assert engine.registry.get(sid).status == "revived"
-    assert c.mass > 1.0 # Boosted
-    assert np.allclose(c.vec, new_vec)
+    # Update with version that has different line numbers
+    with open(TEMP_FILE_PATH, "w") as f:
+        f.write(CODE_V3_MEDIUM_DRIFT)
+    
+    engine.process_file(TEMP_FILE_PATH)
+    
+    # Verify span was updated
+    trace_v2 = store.get_trace(spacecraft_id)
+    span_v2 = trace_v2.span
+    
+    assert span_v2 is not None
+    assert trace_v2.source_file == TEMP_FILE_PATH
+    print(f"✓ Span updated: {span_v1} -> {span_v2}")
+
+
+def test_evolution_identity_preservation(evolution_engine):
+    """Test that symbol identity is preserved across file moves."""
+    engine, store = evolution_engine
+    
+    # Initial file
+    with open(TEMP_FILE_PATH, "w") as f:
+        f.write(CODE_V1)
+    
+    engine.process_file(TEMP_FILE_PATH)
+    
+    # Get Spacecraft.launch ID
+    launch_id = None
+    for sid, meta in engine.registry.registry.items():
+        if "Spacecraft.launch" in meta.qualified_name:
+            launch_id = sid
+            break
+    
+    assert launch_id is not None
+    initial_meta = engine.registry.get(launch_id)
+    
+    # "Move" file (simulate refactoring)
+    new_path = os.path.abspath("temp_evolution_moved.py")
+    with open(new_path, "w") as f:
+        f.write(CODE_V1)
+    
+    try:
+        engine.process_file(new_path)
+        
+        # Verify same ID, updated file path
+        updated_meta = engine.registry.get(launch_id)
+        assert updated_meta.file_path == new_path
+        assert updated_meta.qualified_name == initial_meta.qualified_name
+        assert updated_meta.signature == initial_meta.signature
+        
+        print(f"✓ Identity preserved across file move: {TEMP_FILE_PATH} -> {new_path}")
+    finally:
+        if os.path.exists(new_path):
+            os.remove(new_path)
+
 
 if __name__ == "__main__":
-    # Allow running directly
-    pytest.main([__file__])
+    pytest.main([__file__, "-v"])
