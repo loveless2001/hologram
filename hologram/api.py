@@ -424,28 +424,61 @@ class Hologram:
         Perform a dynamic retrieval using probe physics.
         Returns a structured Memory Packet (SMI).
         """
-        # 1. Encode query via Manifold
-        qv = self.manifold.align_text(query, self.text_encoder)
+        # Use the new Phase 4 Dynamic Graph Retrieval
+        drift_result = self.search_with_drift(query)
         
-        # 2. Initialize Packet
-        if not self.field:
-            # Fallback if gravity is disabled
-            return MemoryPacket(seed=query, nodes=[], edges=[], glyphs=[])
+        probe = drift_result["probe"]
+        tree = drift_result["tree"]
+        
+        nodes = []
+        glyphs = []
+        edges = [] # We can infer edges from tree or gravity relations
+        
+        if tree:
+            # Flatten tree nodes into list
+            for nid, node in tree.nodes.items():
+                # Node Dict for MemoryPacket
+                n_dict = {
+                    "name": nid,
+                    "mass": round(node.mass, 3),
+                    "score": round(node.score, 3),
+                    # "age": ... # Optional if available
+                }
+                nodes.append(n_dict)
+                
+                if node.kind == "glyph":
+                    glyphs.append({
+                        "id": nid.replace("glyph:", ""),
+                        "mass": round(node.mass, 3),
+                        "similarity": round(node.score, 3)
+                    })
             
-        # 3. Spawn Probe & Simulate Trajectory
-        probe = self.field.spawn_probe(qv)
-        self.field.simulate_trajectory(probe, steps=5)
+            # Edges: For now, just connect parent-children in tree or query gravity
+            # Let's use gravity relations for the retrieved nodes
+            node_ids = list(tree.nodes.keys())
+            if self.field and self.field.sim:
+                 # Check all pairs in retrieved set
+                 for i, n1 in enumerate(node_ids):
+                     for n2 in node_ids[i+1:]:
+                         key = (min(n1, n2), max(n1, n2))
+                         if key in self.field.sim.relations:
+                             strength = self.field.sim.relations[key]
+                             if strength > 0.1:
+                                 edges.append({
+                                     "a": n1,
+                                     "b": n2,
+                                     "relation": round(strength, 3),
+                                     "tension": 0.0 # Calculate if needed
+                                 })
+
         
-        # 4. Extract Local Field
-        data = extract_local_field(self.field, probe)
-        
-        # 5. Wrap in Memory Packet
+        # Wrap in Memory Packet
         packet = MemoryPacket(
             seed=query,
-            nodes=data["nodes"],
-            edges=data["edges"],
-            glyphs=data["glyphs"],
-            trajectory_steps=data["trajectory_steps"]
+            nodes=nodes,
+            edges=edges,
+            glyphs=glyphs,
+            trajectory_steps=len(probe.history) if probe else 0
         )
         
         return packet
