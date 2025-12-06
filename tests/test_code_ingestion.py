@@ -1,10 +1,7 @@
 import pytest
-from fastapi.testclient import TestClient
 import os
 import shutil
-from hologram.server import app
 
-client = TestClient(app)
 PROJECT_NAME = "test_code_mapping_layer"
 
 # A richer code snippet with classes, docstrings, and distinct concepts
@@ -44,24 +41,25 @@ def calculate_trajectory(p1, p2):
 TEMP_FILE_PATH = os.path.abspath("temp_space_mission.py")
 
 @pytest.fixture
-def setup_teardown():
+def setup_teardown(test_client):
     # Setup
     with open(TEMP_FILE_PATH, "w") as f:
         f.write(RICH_CODE_CONTENT)
     
     # Clean memory for project
-    client.post(f"/reset/{PROJECT_NAME}?confirm=true")
+    test_client.post(f"/reset/{PROJECT_NAME}?confirm=true")
     
-    yield
+    yield test_client
     
     # Teardown
     if os.path.exists(TEMP_FILE_PATH):
         os.remove(TEMP_FILE_PATH)
     # Optional: Reset again to clean up
-    client.post(f"/reset/{PROJECT_NAME}?confirm=true")
+    test_client.post(f"/reset/{PROJECT_NAME}?confirm=true")
 
 
 def test_code_ingestion_and_query(setup_teardown):
+    client = setup_teardown
     # 1. Ingest
     payload = {
         "project": PROJECT_NAME,

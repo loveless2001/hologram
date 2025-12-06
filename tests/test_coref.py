@@ -49,12 +49,12 @@ def test_gravity_fallback():
     # Restore
     g.encode = original_encode
 
-def test_integration_add_text():
+def test_integration_add_text(isolated_hologram):
     # Initialize Hologram with coref enabled
     Config.coref.ENABLE_COREF = True
     Config.coref.ENABLE_GRAVITY_FALLBACK = True
     
-    h = Hologram.init(use_gravity=True, encoder_mode="hash") # Use hash for speed
+    h = isolated_hologram
     
     # Add a concept manually to the field so fallback has something to find
     # (Hash encoder is deterministic)
@@ -84,12 +84,12 @@ def test_integration_add_text():
                 break
         assert found, f"Coref map failed: {trace.coref_map}"
 
-def test_no_false_fusions():
+def test_no_false_fusions(isolated_hologram):
     # Ensure that resolved pronouns do NOT trigger concept fusion incorrectly
     # i.e. "It" resolving to "engine" shouldn't make "It" a concept alias of "engine" globally
     
     Config.coref.ENABLE_COREF = True
-    h = Hologram.init(use_gravity=True, encoder_mode="hash")
+    h = isolated_hologram
     
     h.add_text("g1", "The engine is loud. It vibrates.")
     

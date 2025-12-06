@@ -30,8 +30,8 @@ def test_memory_store_persistence(tmp_path: Path):
     assert loaded.get_glyph("glyph:hello").trace_ids == ["t1"]
 
 
-def test_chat_memory_and_logs(tmp_path: Path):
-    hologram = Hologram.init(use_clip=False)
+def test_chat_memory_and_logs(tmp_path: Path, isolated_hologram):
+    hologram = isolated_hologram
     memory = ChatMemory(hologram=hologram, session_window=5, cross_session_k=2)
     logs = SessionLog(tmp_path)
 
