@@ -336,7 +336,7 @@ class Hologram:
         Perform a dynamic retrieval using probe physics (Phase 4).
         Returns:
             {
-                "probe": Probe,
+                "probe": None,  # Legacy field
                 "tree": RetrievalTree,
                 "results": List[Dict]  # Ranked traces
             }
@@ -353,50 +353,47 @@ class Hologram:
                 if t: results.append({"trace": t, "score": float(s)})
             return {"probe": None, "tree": None, "results": results}
 
-        # 2. Run probe in gravity field
-        # We assume self.field.sim exposes run_probe (updated Gravity class)
-        probe = self.field.sim.run_probe(
-            vec=qv,
-            name=f"probe:{abs(hash(query))%10**10}",
-            max_steps=probe_steps,
+        # 2. Run ProbeRetriever
+        from .probe import ProbeRetriever
+        from .cost_engine import CostEngine
+        
+        # Initialize CostEngine for this retrieval 
+        # (Could be cached on self, but cheap to init structure)
+        cost_engine = CostEngine()
+        
+        retriever = ProbeRetriever(self.field, cost_engine)
+        tree = retriever.retrieve_tree(
+            query_vec=qv,
+            top_k_seeds=100,
+            max_depth=3,
+            final_k=40
         )
 
-        # 3. Build retrieval tree
-        tree = self.field.sim.build_retrieval_tree(probe)
-
-        # 4. Pick final concept ids as anchors
-        concept_ids = [
-            nid for nid, node in tree.nodes.items()
-            if node.kind in ("concept", "glyph")
-        ]
-
-        # 5. Map concepts -> traces
+        # 3. Map concepts -> traces
         # Traces are either direct text nodes (concept_id="trace:...") or linked via Glyphs
         trace_scores: Dict[str, float] = {}
-
-        for cid in concept_ids:
-            node = tree.nodes[cid]
+        
+        # The tree nodes are our anchor points.
+        # We need to rank them by relevance to the query.
+        # This information is in node.sim_to_query and node.path_energy.
+        
+        for nid, node in tree.nodes.items():
             
-            # Case A: Concept IS a trace (e.g. text trace added as concept)
-            # We need to know if a concept ID corresponds to a trace ID.
-            # In store.py: "self.sim.add_concept(t.trace_id...)"
-            # So concept keys ARE trace IDs often.
-            
-            # Check if this concept ID exists as a trace
-            tr = self.store.get_trace(cid)
+            # Case A: Concept IS a trace
+            tr = self.store.get_trace(nid)
             if tr:
-                trace_scores[cid] = max(trace_scores.get(cid, 0.0), node.score)
+                trace_scores[nid] = max(trace_scores.get(nid, 0.0), node.sim_to_query)
             
             # Case B: Concept is a Glyph -> get attached traces
-            if cid.startswith("glyph:"):
+            if nid.startswith("glyph:"):
                 # Glyph ID is the part after "glyph:"
-                gid = cid.replace("glyph:", "")
+                gid = nid.replace("glyph:", "")
                 glyph = self.store.get_glyph(gid)
                 if glyph:
                     for tid in glyph.trace_ids:
-                        trace_scores[tid] = max(trace_scores.get(tid, 0.0), node.score)
+                        trace_scores[tid] = max(trace_scores.get(tid, 0.0), node.sim_to_query)
 
-        # 6. Rank traces
+        # 4. Rank traces
         ranked = sorted(
             trace_scores.items(),
             key=lambda x: x[1],
@@ -412,9 +409,9 @@ class Hologram:
                     "score": s,
                 })
 
-        # 7. Return both path + tree + traces
+        # 5. Return both path + tree + traces
         return {
-            "probe": probe,
+            "probe": None, # Deprecated legacy field
             "tree": tree,
             "results": results,
         }
@@ -427,12 +424,11 @@ class Hologram:
         # Use the new Phase 4 Dynamic Graph Retrieval
         drift_result = self.search_with_drift(query)
         
-        probe = drift_result["probe"]
         tree = drift_result["tree"]
         
         nodes = []
         glyphs = []
-        edges = [] # We can infer edges from tree or gravity relations
+        edges = [] 
         
         if tree:
             # Flatten tree nodes into list
@@ -441,36 +437,27 @@ class Hologram:
                 n_dict = {
                     "name": nid,
                     "mass": round(node.mass, 3),
-                    "score": round(node.score, 3),
+                    "score": round(node.sim_to_query, 3), # Use similarity as score
+                    "energy": round(node.path_energy, 3) 
                     # "age": ... # Optional if available
                 }
                 nodes.append(n_dict)
                 
-                if node.kind == "glyph":
+                if nid.startswith("glyph:"):
                     glyphs.append({
                         "id": nid.replace("glyph:", ""),
                         "mass": round(node.mass, 3),
-                        "similarity": round(node.score, 3)
+                        "similarity": round(node.sim_to_query, 3)
                     })
             
-            # Edges: For now, just connect parent-children in tree or query gravity
-            # Let's use gravity relations for the retrieved nodes
-            node_ids = list(tree.nodes.keys())
-            if self.field and self.field.sim:
-                 # Check all pairs in retrieved set
-                 for i, n1 in enumerate(node_ids):
-                     for n2 in node_ids[i+1:]:
-                         key = (min(n1, n2), max(n1, n2))
-                         if key in self.field.sim.relations:
-                             strength = self.field.sim.relations[key]
-                             if strength > 0.1:
-                                 edges.append({
-                                     "a": n1,
-                                     "b": n2,
-                                     "relation": round(strength, 3),
-                                     "tension": 0.0 # Calculate if needed
-                                 })
-
+            # Edges from tree structure
+            for edge in tree.edges:
+                 edges.append({
+                     "a": edge.source,
+                     "b": edge.target,
+                     "relation": round(edge.relation_strength, 3),
+                     "tension": round(edge.edge_energy, 3) # Use edge energy as tension proxy
+                 })
         
         # Wrap in Memory Packet
         packet = MemoryPacket(
@@ -478,7 +465,7 @@ class Hologram:
             nodes=nodes,
             edges=edges,
             glyphs=glyphs,
-            trajectory_steps=len(probe.history) if probe else 0
+            trajectory_steps=0 # Probe logic changed, no linear trajectory
         )
         
         return packet
