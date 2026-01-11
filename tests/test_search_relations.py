@@ -1,77 +1,91 @@
-#!/usr/bin/env python3
-"""
-Test the enhanced /search endpoint with concept relations.
-"""
-import requests
-import json
+# tests/test_search_relations.py
+import pytest
+import os
+from fastapi.testclient import TestClient
+from hologram.server import app, hologram_instances
 
-API_URL = "http://localhost:8000"
+# Use absolute path for test data or mock it
+KB_PATH = os.path.abspath("tests/data/relativity.txt")
 
-def test_search_with_relations():
+@pytest.fixture
+def client():
+    # Setup
+    hologram_instances.clear()
+    with TestClient(app) as c:
+        yield c
+    # Teardown
+    hologram_instances.clear()
+
+def test_search_with_relations(client):
     print("=" * 60)
     print("Testing Enhanced /search Endpoint with Relations")
     print("=" * 60)
     
+    # 0. Create dummy KB file if not exists
+    if not os.path.exists(KB_PATH):
+        os.makedirs(os.path.dirname(KB_PATH), exist_ok=True)
+        with open(KB_PATH, "w") as f:
+            f.write("The speed of light is constant. Time dilation occurs near light speed.")
+    
     # 1. Load KB
     print("\n1. Loading KB...")
-    response = requests.post(f"{API_URL}/chat", json={
-        "message": "load",
-        "kb_name": "relativity.txt"
+    # Use /ingest to load content (since /chat load is deprecated/missing)
+    with open(KB_PATH, "r") as f:
+        kb_text = f.read()
+        
+    response = client.post("/ingest", json={
+        "project": "default",
+        "text": kb_text,
+        "origin": "kb",
+        "metadata": {"source": "relativity.txt"}
     })
     print(f"   Status: {response.status_code}")
+    # We assert success here to catch errors early
+    assert response.status_code == 200
     
     # 2. Search with relations
-    print("\n2. Searching for 'speed of light' with relations...")
-    response = requests.post(f"{API_URL}/search", json={
-        "query": "speed of light",
+    print(f"\n2. Searching for 'speed of light' with relations...")
+    response = client.post("/query", json={
+        "project": "default",
+        "text": "speed of light",
         "top_k": 3
     })
     
-    if response.status_code == 200:
-        data = response.json()
-        print(f"\n   Query: '{data['query']}'")
-        print(f"   Found {len(data['results'])} results\n")
+    if response.status_code != 200:
+        print(f"ERROR: {response.status_code}")
+        print(f"Body: {response.text}")
         
-        for i, result in enumerate(data['results'], 1):
-            print(f"   {i}. {result['content']}")
-            print(f"      Similarity: {result['score'] * 100:.1f}%")
-            
-            if result.get('relations'):
-                print(f"      Relations ({len(result['relations'])}):")
-                for rel in result['relations'][:3]:  # Show top 3
-                    print(f"         → {rel['concept'][:50]} (strength: {rel['strength'] * 100:.1f}%)")
-            else:
-                print("      Relations: None")
-            print()
+    assert response.status_code == 200
+    data = response.json()
+    print(f"\n   Query: '{data['query']}'")
+    # Response structure: nodes, edges, glyphs, trajectory_steps
+    # Map to test expectation (it used to expect "results")
+    if "nodes" in data:
+         results = data["nodes"]
     else:
-        print(f"   Error: {response.status_code}")
-        print(f"   {response.text}")
+         results = data.get("results", [])
+         
+    print(f"   Found {len(results)} results\n")
+    
+    assert len(results) > 0
     
     # 3. Search for a different keyword
     print("\n3. Searching for 'time dilation' with relations...")
-    response = requests.post(f"{API_URL}/search", json={
-        "query": "time dilation",
+    response = client.post("/query", json={
+        "project": "default",
+        "text": "time dilation",
         "top_k": 3
     })
     
-    if response.status_code == 200:
-        data = response.json()
-        print(f"\n   Query: '{data['query']}'")
-        print(f"   Found {len(data['results'])} results\n")
-        
-        for i, result in enumerate(data['results'], 1):
-            print(f"   {i}. {result['content']}")
-            print(f"      Similarity: {result['score'] * 100:.1f}%")
-            
-            if result.get('relations'):
-                print(f"      Top Relations:")
-                for rel in result['relations'][:3]:
-                    print(f"         → {rel['concept'][:50]} (strength: {rel['strength'] * 100:.1f}%)")
-            print()
+    assert response.status_code == 200
+    data = response.json()
     
-    print("\n" + "=" * 60)
-    print("Test Complete!")
-    print("=" * 60)
+    if "nodes" in data:
+         results = data["nodes"]
+    else:
+         results = data.get("results", [])
+         
+    assert len(results) > 0
 
-if __name__ == "__main__":
-    test_search_with_relations()
+    print("\nTest Complete!")
+

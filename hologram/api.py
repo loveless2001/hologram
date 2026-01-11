@@ -262,27 +262,38 @@ class Hologram:
             self.field.add(trace_id, vec)
         return trace_id
 
-    def ingest_code(self, file_path: str, add_to_field: bool = True):
+    def ingest_code(self, file_path: str) -> int:
         """
-        Ingest a source code file using the Evolution Pipeline.
+        Ingest source code file (read from disk).
+        """
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return self.ingest_code_content(file_path, content)
+
+    def ingest_code_content(self, file_path: str, content: str, add_to_field: bool = True):
+        """
+        Ingest source code directly from string content.
         """
         from .code_map.evolution import CodeEvolutionEngine
         
-        # Wrapper for embedding
         def vectorizer(text: str) -> np.ndarray:
              return self.manifold.align_text(text, self.text_encoder)
              
         engine = CodeEvolutionEngine(self.store, vectorizer)
         
-        # Ensure registry uses the same persistence path as store if possible, 
-        # or just a sidecar file. Engine defaults to "data/symbol_registry.json".
-        
-        count = engine.process_file(file_path)
-        
-        # Sync gravity field if needed (Engine updates concepts directly, 
-        # but if `add_to_field` logic was external, we might need to handle it.
-        # The Engine assumes it modifies self.field directly.)
-        
+        # We need to bypass file reading.
+        # Check if engine has process_source or similar.
+        # If not, we might need to rely on engine implementation details.
+        # Assuming we can add/use a method that takes content.
+        # Let's assume process_source exists or we add it.
+        if hasattr(engine, 'process_source'):
+            count = engine.process_source(content, file_path)
+        else:
+            # Fallback: Create temp file? Or raise error?
+            # Ideally, update CodeEvolutionEngine.
+            # For now, let's assume we update CodeEvolutionEngine to have process_source.
+            raise NotImplementedError("CodeEvolutionEngine needs process_source method")
+            
         if self.field:
             self.field.sim.step_dynamics()
             

@@ -45,18 +45,21 @@ class CodeEvolutionEngine:
         import os
         os.makedirs("logs", exist_ok=True)
 
-    def process_file(self, file_path: str, language: str = "python") -> int:
+    def process_source(self, content: str, file_path: str, language: str = "python") -> int:
         """
-        Process a source file, compute diffs against memory, and apply evolution.
-        Returns number of processed symbols.
+        Process source code from a string buffer.
         """
-        # 1. Parse & Extract
-        parser = CodeParser() # In Phase 2 this should handle multiple languages
-        raw_nodes = parser.parse_file(file_path)
+        parser = CodeParser()
+        # Use parse_string to get flattened symbol definitions
+        raw_nodes = parser.parse_string(content, filename=file_path)
         
         extractor = SymbolExtractor()
         current_symbols = extractor.extract(raw_nodes, file_path)
         
+        return self._process_symbols(current_symbols, file_path, language)
+
+    def _process_symbols(self, current_symbols, file_path, language) -> int:
+        """Internal logic shared by file and source processing."""
         # Track seen IDs to detect deletions
         seen_symbol_ids = set()
         
@@ -74,11 +77,7 @@ class CodeEvolutionEngine:
             
             if not meta:
                 # --- NEW SYMBOL CASE ---
-                # Check for collision before adding
                 if self._check_collision(sym_data["name"], new_vec):
-                    # Collision detected! Force drift or rename?
-                    # For now, we enforce uniqueness by ensuring ID hash is distinct (it is).
-                    # But semantically, if name is very similar to another concept, specific logic applies.
                     pass
                 
                 self._handle_new_symbol(sym_data, new_vec, language)
@@ -86,11 +85,8 @@ class CodeEvolutionEngine:
                 
             else:
                 # --- UPDATE CASE ---
-                # Check Drift
                 concept = self.field.concepts.get(symbol_id)
                 if not concept:
-                    # Should exist if in registry. Recovery/Sync issue?
-                    # Treat as new for now
                     self._handle_new_symbol(sym_data, new_vec, language)
                     updates_count += 1
                     continue
@@ -114,35 +110,41 @@ class CodeEvolutionEngine:
                 updates_count += 1
                 
                 if drift < Config.evolution.DRIFT_SMALL:
-                    # Small Drift (< 0.08) -> Micro adjustment / Stability
                     self._handle_fusion(concept, new_vec, sym_data["name"])
-                    
                 elif drift < Config.evolution.DRIFT_MEDIUM:
-                    # Medium Drift (0.08 - 0.22) -> Soft Fusion (Interpolation)
                     self._handle_soft_fusion(concept, new_vec, sym_data["name"])
-                    
                 elif drift > Config.evolution.DRIFT_LARGE:
-                    # Large Drift (> 0.38) -> Mitosis (Split)
-                    # We reuse gravity logic, but trigger it explicitly
                     self._handle_mitosis_explicit(concept, new_vec, sym_data)
                 else:
-                    # Between Medium and Large (0.22 - 0.38) -> Strong Adaptation
-                    # Treat as heavy Soft Fusion
                      self._handle_soft_fusion(concept, new_vec, sym_data["name"])
                 
-                # Check Vector Rot (Fatigue)
                 self._check_vector_rot(concept, new_vec)
 
         # Handle Deprecations (Symbols in registry for this file NOT in current scan)
-        # We need efficient lookup for "symbols belonging to this file"
-        # Since scanning linear registry is slow, we can optimize later.
-        # For prototype, we unfortunately iterate.
         for sid, m in self.registry.registry.items():
             if m.file_path == file_path and sid not in seen_symbol_ids and m.status == "active":
                 self._handle_deprecation(sid)
                 
         self.registry.save()
         return updates_count
+
+    def process_file(self, file_path: str, language: str = "python") -> int:
+        """
+        Process a source file, compute diffs against memory, and apply evolution.
+        Returns number of processed symbols.
+        """
+        # 1. Parse & Extract
+        parser = CodeParser() 
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            
+        # Use parse_string to get flattened symbol definitions
+        raw_nodes = parser.parse_string(content, filename=file_path)
+        
+        extractor = SymbolExtractor()
+        current_symbols = extractor.extract(raw_nodes, file_path)
+        
+        return self._process_symbols(current_symbols, file_path, language)
 
     def _handle_new_symbol(self, sym_data, vec, language):
         """Register and store a completely new symbol."""

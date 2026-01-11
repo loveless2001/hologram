@@ -10,10 +10,25 @@ class CodeParser:
     Parses Python source code into a flat list of symbol definitions (classes, functions).
     """
 
-    def parse_file(self, file_path: str) -> List[Dict[str, Any]]:
-        with open(file_path, "r", encoding="utf-8") as f:
-            source = f.read()
-            return self.parse_string(source, filename=file_path)
+    def parse_source(self, content: str) -> ast.AST:
+        """Parse source code string into AST."""
+        try:
+            return ast.parse(content)
+        except SyntaxError as e:
+            # print(f"Syntax error parsing source: {e}")
+            return ast.parse("") # Return empty module on failure
+
+    def parse_file(self, file_path: str) -> ast.AST:
+        """Parse a source file into AST."""
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                return ast.parse(f.read(), filename=file_path)
+        except SyntaxError as e:
+            print(f"Syntax error in {file_path}: {e}")
+            return ast.parse("") # Return empty module on failure
+        except Exception as e:
+            print(f"Error parsing {file_path}: {e}")
+            return ast.parse("")
 
     def parse_string(self, source: str, filename: str = "<string>") -> List[Dict[str, Any]]:
         try:

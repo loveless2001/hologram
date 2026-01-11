@@ -73,6 +73,7 @@ class IngestCodeRequest(BaseModel):
     project: str
     path: str
     tier: int = TIER_DOMAIN
+    content: Optional[str] = None
 
 class QueryCodeRequest(BaseModel):
     project: str
@@ -242,7 +243,12 @@ async def ingest_code(req: IngestCodeRequest):
     """
     try:
         holo = get_or_create_hologram(req.project)
-        count = holo.ingest_code(req.path)
+        
+        if req.content:
+            count = holo.ingest_code_content(req.path, req.content)
+        else:
+            count = holo.ingest_code(req.path)
+            
         return {
              "status": "success",
              "project": req.project,

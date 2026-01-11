@@ -1303,6 +1303,16 @@ class GravityField:
         else:
             self.index = None
 
+    @property
+    def concepts(self):
+        return self.sim.concepts
+        
+    @property
+    def relations(self):
+        return self.sim.relations
+
+
+
     def add(
         self, 
         name: str, 

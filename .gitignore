@@ -21,3 +21,5 @@ docs/tracking
 vscode_extension/
 *.sh
 logs/
+agent_self_memory.json
+.hologram
