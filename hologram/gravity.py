@@ -91,15 +91,18 @@ def detect_negation(text: str) -> bool:
     return any(tok in NEGATION_WORDS for tok in tokens)
 
 
-def calibrate_quantization() -> float:
+def calibrate_quantization(n_concepts: int = 0) -> float:
     """
-    Calibrate quantization level based on hardware specs.
-    Lower level = more propagation (better hardware).
-    Higher level = less propagation (weaker hardware).
+    Calibrate quantization level based on hardware specs and dataset scale.
+    Lower level = more propagation (better hardware, smaller dataset).
+    Higher level = less propagation (weaker hardware, larger dataset).
+
+    Args:
+        n_concepts: Current number of concepts in field (0 = ignore scale)
     """
     # Base level (conservative)
     q_level = 0.05
-    
+
     # 1. GPU Check (FAISS)
     try:
         num_gpus = faiss.get_num_gpus()
@@ -129,6 +132,14 @@ def calibrate_quantization() -> float:
                 q_level += 0.02
         except Exception:
             pass
+
+    # 4. Scale-based adjustment (larger dataset = coarser quantization)
+    if n_concepts > 100_000:
+        q_level += 0.03
+    elif n_concepts > 10_000:
+        q_level += 0.02
+    elif n_concepts > 1_000:
+        q_level += 0.01
 
     return max(0.001, min(q_level, 0.2))  # Clamp between 0.001 and 0.2
 
@@ -257,10 +268,39 @@ class Gravity:
     # PCA Cache
     _pca_cache: Optional[Tuple[int, Any]] = field(default=None, repr=False)
 
+    # FAISS Index Cache for nearest_concepts()
+    _faiss_index: Optional[faiss.IndexFlatIP] = field(default=None, repr=False)
+    _index_names: List[str] = field(default_factory=list, repr=False)
+    _index_dirty: bool = field(default=True, repr=False)
+
     def __post_init__(self):
         self._lock = threading.RLock()  # Thread safety for all mutations
         if self.quantization_level is None:
-            self.quantization_level = calibrate_quantization()
+            self.quantization_level = calibrate_quantization(len(self.concepts))
+
+    def _rebuild_index(self):
+        """Rebuild FAISS index from current TIER_DOMAIN/TIER_META concepts."""
+        # Filter valid attractors (skip aliases)
+        candidates = [
+            n for n in self.concepts.keys()
+            if (self.concepts[n].tier == TIER_DOMAIN
+                or self.concepts[n].tier == TIER_META
+                or n.startswith("glyph:"))
+            and self.concepts[n].canonical_id is None
+        ]
+
+        if not candidates:
+            self._faiss_index = None
+            self._index_names = []
+            self._index_dirty = False
+            return
+
+        # Build index with normalized vectors
+        vecs = np.stack([self.concepts[n].vec for n in candidates]).astype('float32')
+        self._faiss_index = faiss.IndexFlatIP(self.dim)
+        self._faiss_index.add(vecs)
+        self._index_names = candidates
+        self._index_dirty = False
 
     def encode(self, text: str) -> np.ndarray:
         toks = text.lower().split()
@@ -493,7 +533,10 @@ class Gravity:
             keys_to_del = [k for k in self.relations if name in k]
             for k in keys_to_del:
                 del self.relations[k]
-                
+
+            # Mark FAISS index dirty (siblings added, original removed)
+            self._index_dirty = True
+
             return True
 
     def neighborhood_divergence(self, a_name: str, b_name: str, threshold: float = 0.4) -> float:
@@ -730,11 +773,14 @@ class Gravity:
                     
                     # Remove old relation
                     del self.relations[(n1, n2)]
-            
+
             canonical.last_reinforced = self.global_step
-            
+
+            # Mark FAISS index dirty
+            self._index_dirty = True
+
             return True
-    
+
     def resolve_pronoun(self, sentence: str, pronoun_span: str) -> Optional[str]:
         """
         Resolve a pronoun using vector similarity in the gravity field.
@@ -876,10 +922,10 @@ class Gravity:
                 negation = False
                 
             self.concepts[name] = Concept(
-                name=name, 
-                vec=vec, 
-                mass=mass, 
-                count=1, 
+                name=name,
+                vec=vec,
+                mass=mass,
+                count=1,
                 negation=negation,
                 last_reinforced=self.global_step,
                 # NEW fields
@@ -889,7 +935,10 @@ class Gravity:
                 last_mitosis_step=-1000,
                 last_fusion_step=-1000
             )
-            
+
+            # Mark FAISS index dirty
+            self._index_dirty = True
+
             # Only apply drift if Tier 1
             if tier == TIER_DOMAIN:
                 self._mutual_drift(name)
@@ -1060,41 +1109,39 @@ class Gravity:
     # --- Probe Physics ---
     def nearest_concepts(self, vec: np.ndarray, top_k: int = 10) -> List[Tuple[str, float]]:
         """
-        Find nearest concepts using mass-weighted similarity.
-        sim = cosine(vec, c.vec) * log(1 + c.mass)
+        Find nearest concepts using FAISS + mass-weighted reranking.
+        Uses persistent index for O(log N) search instead of O(N) brute force.
         """
         if not self.concepts:
             return []
-            
-        # Filter for valid attractors (Tier 1 Domain or Glyphs)
-        # Optimization: Maintain a separate list/matrix for these
-        candidates = [
-            n for n in self.concepts.keys() 
-            if self.concepts[n].tier == TIER_DOMAIN or self.concepts[n].tier == TIER_META 
-            or n.startswith("glyph:")
-        ]
-        
-        if not candidates:
+
+        # Lazy rebuild index if dirty (under lock)
+        with self._lock:
+            if self._index_dirty or self._faiss_index is None:
+                self._rebuild_index()
+
+        if not self._index_names:
             return []
 
-        # Brute force for physics accuracy (taking mass into account)
-        # FAISS search is purely geometric (cosine), so we'd need to re-rank.
-        
-        vec = vec / (np.linalg.norm(vec) + 1e-8)
-        
+        # Normalize query vector
+        vec = (vec / (np.linalg.norm(vec) + 1e-8)).reshape(1, -1).astype('float32')
+
+        # FAISS search: fetch 3× to account for mass reranking
+        fetch_k = min(top_k * 3, len(self._index_names))
+        D, I = self._faiss_index.search(vec, fetch_k)
+
+        # Rerank by mass-weighted similarity
         results = []
-        for name in candidates:
-            c = self.concepts[name]
-            # Geometric similarity
-            cos_sim = float(np.dot(vec, c.vec))
-            
-            # Mass-weighted similarity
-            # High mass nodes pull from further away
-            weighted_sim = cos_sim * np.log1p(c.mass)
-            
-            results.append((name, weighted_sim))
-            
-        # Sort by weighted score
+        for cos_sim, idx in zip(D[0], I[0]):
+            if idx < 0 or idx >= len(self._index_names):
+                continue
+            name = self._index_names[idx]
+            if name not in self.concepts:
+                continue
+            mass = self.concepts[name].mass
+            weighted_sim = cos_sim * np.log1p(mass)
+            results.append((name, float(weighted_sim)))
+
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
 
@@ -1175,7 +1222,72 @@ class Gravity:
             neighbors=neighbors,
             chosen=[name for name, _ in used]
         ))
-        
+
+        return probe
+
+    def _step_probe_cached(
+        self,
+        probe: Probe,
+        neighbor_cache: Dict[str, Tuple[np.ndarray, float]],
+        min_sim: float = 0.2,
+        alpha: float = 0.4,
+        beta: float = 0.15,
+    ) -> Probe:
+        """
+        Execute probe step using cached neighbor data.
+        neighbor_cache: {name: (vec, mass)}
+        """
+        # Compute similarities from cache
+        neighbors = []
+        for name, (nvec, nmass) in neighbor_cache.items():
+            cos_sim = float(np.dot(probe.vec, nvec))
+            weighted_sim = cos_sim * np.log1p(nmass)
+            neighbors.append((name, weighted_sim))
+
+        neighbors.sort(key=lambda x: x[1], reverse=True)
+
+        # Filter by minimum attraction
+        used = [(name, sim) for name, sim in neighbors if sim >= min_sim]
+
+        if not used:
+            probe.history.append(ProbeStep(
+                position=probe.vec.copy(),
+                neighbors=neighbors[:10],
+                chosen=[]
+            ))
+            return probe
+
+        # Accumulate attraction force
+        attraction = np.zeros_like(probe.vec, dtype=np.float32)
+        total_weight = 0.0
+
+        for name, weight in used[:10]:  # Limit to top-10 for force calc
+            nvec, _ = neighbor_cache[name]
+            w = max(weight, 0.0)
+            total_weight += w
+            attraction += w * (nvec - probe.vec)
+
+        if total_weight > 0:
+            attraction /= (total_weight + 1e-8)
+
+        # Inertia/damping
+        inertia = np.zeros_like(probe.vec)
+        if probe.previous_vec is not None:
+            inertia = probe.vec - probe.previous_vec
+
+        # Update position
+        new_pos = probe.vec + (alpha * attraction) - (beta * inertia)
+        new_pos /= (np.linalg.norm(new_pos) + 1e-8)
+
+        probe.previous_vec = probe.vec.copy()
+        probe.vec = new_pos
+
+        probe.history.append(ProbeStep(
+            position=probe.vec.copy(),
+            neighbors=neighbors[:10],
+            chosen=[name for name, _ in used[:10]]
+        ))
+
         return probe
 
     def run_probe(
@@ -1185,26 +1297,46 @@ class Gravity:
         max_steps: int = 8,
         tol: float = 1e-3,
         top_k: int = 10,
-        min_sim: float = 0.1, # Lower threshold suitable for weighted sim
+        min_sim: float = 0.1,
+        use_cache: bool = True,
     ) -> Probe:
-        """Run probe simulation until convergence."""
+        """Run probe simulation until convergence.
+
+        Args:
+            use_cache: If True, pre-fetch neighbors once and use cache during
+                       drift steps (faster). If False, query nearest_concepts
+                       each step (slower but always fresh).
+        """
         probe = Probe(
-            name=name, 
+            name=name,
             vec=vec.astype("float32"),
             previous_vec=None
         )
-        # Initial state recording
-        # probe.history.append(...) ? No, steps record the transitions.
+
+        # Pre-fetch neighbors and build cache
+        neighbor_cache = None
+        if use_cache:
+            # Fetch 50 neighbors (5× default) to cover drift region
+            initial_neighbors = self.nearest_concepts(vec, top_k=50)
+            neighbor_cache = {}
+            for n, _ in initial_neighbors:
+                if n in self.concepts:
+                    c = self.concepts[n]
+                    neighbor_cache[n] = (c.vec.copy(), c.mass)
 
         for _ in range(max_steps):
             prev_vec = probe.vec.copy()
-            self.step_probe(probe, top_k=top_k, min_sim=min_sim)
-            
+
+            if neighbor_cache:
+                self._step_probe_cached(probe, neighbor_cache, min_sim=min_sim)
+            else:
+                self.step_probe(probe, top_k=top_k, min_sim=min_sim)
+
             # Check convergence
             delta = np.linalg.norm(probe.vec - prev_vec)
             if delta < tol:
                 break
-                
+
         return probe
 
     def build_retrieval_tree(
