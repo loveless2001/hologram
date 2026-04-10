@@ -7,6 +7,13 @@ Compares retrieval quality between global (search_across) and glyph-routed
 or mass-weighted rerank on either path.
 
 Metrics: Recall@5, Interference Rate, Latency
+
+Latency note:
+- Routed search uses lazy shard construction.
+- In this synthetic control, cold-path overhead is small enough that the
+  latency result is still directionally useful.
+- For projected operators or more expensive glyph transforms, use the
+  MiniLM benchmark and interpret cold vs warm latency separately.
 """
 import os
 os.environ["HOLOGRAM_QUIET"] = "1"

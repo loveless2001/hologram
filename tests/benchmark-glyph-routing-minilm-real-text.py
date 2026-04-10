@@ -7,6 +7,13 @@ where domain signal is distributed (not axis-aligned). Decision gate for
 whether learned R_g is needed.
 
 Compares: global search vs routed (identity) vs routed (R_g + P_k)
+
+Important latency note:
+- Routed search lazily builds glyph operators and shard indexes.
+- For projected methods, the first timed routed query includes cold-path work
+  such as QR decomposition, trace transforms, and FAISS shard construction.
+- Quality comparisons are still valid, but raw latency output should be read as
+  cold-or-partially-amortized latency unless warm-up timing is added.
 """
 import os
 os.environ["HOLOGRAM_QUIET"] = "1"

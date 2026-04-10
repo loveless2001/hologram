@@ -5,8 +5,9 @@ Glyph-routed retrieval — routes queries through glyph-conditioned subspaces.
 Doc spec (north-star): query → infer p(g|q) → transform via T_g → search glyph shards
                        → cross-glyph merge → optional global fallback → results
 
-Phase 1: identity transforms (GlyphOperator is no-op), proves routing thesis.
-Phase 2+: real R_g + P_k transforms swap in without changing this module's logic.
+Supports both identity mode (use_projection=False) and real subspace
+transforms (use_projection=True) via GlyphOperator. Router logic is
+independent of transform implementation.
 """
 import numpy as np
 import faiss

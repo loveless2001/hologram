@@ -16,14 +16,13 @@ from .config import VECTOR_DIM
 from .embeddings import (
     ImageCLIP,
     TextCLIP,
-    TextCLIP,
     TextHasher,
     TextMiniLM,
     ImageStub,
     open_clip,
     get_clip_embed_dim,
 )
-from .gravity import GravityField  # ← integrate Memory Gravity
+from .gravity import GravityField
 from .text_utils import extract_concepts, normalize_text
 from .manifold import LatentManifold
 from .retrieval import extract_local_field
@@ -46,32 +45,23 @@ class Hologram:
     image_encoder: Any
     manifold: LatentManifold
     field: Optional[GravityField] = None
-    router: Optional[GlyphRouter] = None  # Glyph-routed retrieval
-    project: str = "default"  # NEW: Project namespace
+    router: Optional[GlyphRouter] = None
+    project: str = "default"
 
-    # --- Initialization ---
-    @classmethod
-    def init(
-        cls,
-        model_name: str = "ViT-B-32",
-        pretrained: str = "laion2b_s34b_b79k",
-        use_clip: bool = True,
-        use_gravity: bool = True,
-        encoder_mode: str = "minilm",  # "default", "hash", "minilm", "clip"
-        auto_ingest_system: bool = True,  # NEW: Auto-load system concepts
-    ):
-        # Encoder setup
+    # --- Shared encoder/instance setup ---
+    @staticmethod
+    def _resolve_encoders(encoder_mode, vec_dim, use_clip=True,
+                          model_name="ViT-B-32", pretrained="laion2b_s34b_b79k"):
+        """Resolve text/image encoders and output dimension from mode string."""
         text_enc = None
         img_enc = None
-        store_dim = VECTOR_DIM
+        store_dim = vec_dim
 
-        # 1. Resolve Text Encoder
         if encoder_mode == "minilm":
             text_enc = TextMiniLM()
-            store_dim = 384  # MiniLM-L6-v2 dim
+            store_dim = 384
         elif encoder_mode == "hash":
-            text_enc = TextHasher(dim=VECTOR_DIM)
-            store_dim = VECTOR_DIM
+            text_enc = TextHasher(dim=vec_dim)
         elif encoder_mode == "clip" or (encoder_mode == "default" and use_clip):
             if torch is None or open_clip is None:
                 raise RuntimeError("CLIP requested but dependencies missing.")
@@ -83,32 +73,63 @@ class Hologram:
             text_enc = TextCLIP(model=model, device=device)
             img_enc = ImageCLIP(model=model, preprocess=preprocess, device=device)
         else:
-            # Fallback default -> hash if use_clip=False
-            text_enc = TextHasher(dim=VECTOR_DIM)
-            store_dim = VECTOR_DIM
+            text_enc = TextHasher(dim=vec_dim)
 
-        # 2. Resolve Image Encoder (if not already set by CLIP)
         if img_enc is None:
             img_enc = ImageStub(dim=store_dim)
 
-        store = MemoryStore(vec_dim=store_dim)
+        return text_enc, img_enc, store_dim
 
+    @classmethod
+    def _build_instance(cls, store, text_enc, img_enc, use_gravity=True,
+                        field=None):
+        """Build a Hologram instance from components (shared by init/load)."""
+        if field is None and use_gravity:
+            field = GravityField(dim=store.vec_dim)
         manifold = LatentManifold(dim=store.vec_dim)
-        field = GravityField(dim=store.vec_dim) if use_gravity else None
-
         glyphs_reg = GlyphRegistry(store)
         router = GlyphRouter(store, glyphs_reg, gravity_field=field)
-
-        instance = cls(
-            store=store,
-            glyphs=glyphs_reg,
-            text_encoder=text_enc,
-            image_encoder=img_enc,
-            manifold=manifold,
-            field=field,
-            router=router,
-            project="default"  # Default project namespace
+        return cls(
+            store=store, glyphs=glyphs_reg,
+            text_encoder=text_enc, image_encoder=img_enc,
+            manifold=manifold, field=field, router=router,
         )
+
+    @staticmethod
+    def _auto_ingest_system(instance, auto_ingest, use_gravity, text_enc):
+        """Ingest system concepts as Tier 2 if not already present."""
+        if not (auto_ingest and use_gravity and instance.field):
+            return
+        from .system_kb import get_system_concepts
+        from .text_utils import extract_concepts
+
+        existing = [n for n in instance.field.sim.concepts
+                    if n.startswith("system:")
+                    and instance.field.sim.concepts[n].tier == 2]
+        if existing:
+            return
+
+        for concept_text in extract_concepts(get_system_concepts()):
+            vec = instance.manifold.align_text(concept_text, text_enc)
+            cid = f"system:{abs(hash(concept_text))%10**10}"
+            instance.field.add(cid, vec, tier=2, project="hologram",
+                               origin="system_design")
+
+    # --- Initialization ---
+    @classmethod
+    def init(
+        cls,
+        model_name: str = "ViT-B-32",
+        pretrained: str = "laion2b_s34b_b79k",
+        use_clip: bool = True,
+        use_gravity: bool = True,
+        encoder_mode: str = "minilm",
+        auto_ingest_system: bool = True,
+    ):
+        text_enc, img_enc, store_dim = cls._resolve_encoders(
+            encoder_mode, VECTOR_DIM, use_clip, model_name, pretrained)
+        store = MemoryStore(vec_dim=store_dim)
+        instance = cls._build_instance(store, text_enc, img_enc, use_gravity)
         
         # NEW: Initialize Normalization Pipeline
         from .normalization import NormalizationPipeline
@@ -119,43 +140,15 @@ class Hologram:
             return instance.manifold.align_text(text, instance.text_encoder)
             
         pipeline = NormalizationPipeline(
-            gravity_field=field,
+            gravity_field=instance.field,
             encode_func=encode_func,
-            enable_llm_correction=False # Disabled by default as requested
+            enable_llm_correction=False
         )
         set_global_pipeline(pipeline)
-        
-        # NEW: Auto-ingest system concepts as Tier 2
-        if auto_ingest_system and use_gravity and field:
-            from .system_kb import get_system_concepts
-            from .text_utils import extract_concepts
-            
-            # Check if system concepts already exist (e.g., from loaded state)
-            existing_system_concepts = [
-                name for name in field.sim.concepts.keys()
-                if name.startswith("system:") and field.sim.concepts[name].tier == 2
-            ]
-            
-            # Only ingest if no system concepts found
-            if not existing_system_concepts:
-                system_text = get_system_concepts()
-                concepts = extract_concepts(system_text)
-                
-                for concept_text in concepts:
-                    concept_vec = instance.manifold.align_text(concept_text, text_enc)
-                    concept_id = f"system:{abs(hash(concept_text))%10**10}"
-                    
-                    instance.field.add(
-                        concept_id,
-                        concept_vec,
-                        tier=2,  # Tier 2: System concepts
-                        project="hologram",
-                        origin="system_design"
-                    )
-            else:
-                # System concepts already loaded from save file
-                pass
-        
+
+        # Auto-ingest system concepts as Tier 2
+        cls._auto_ingest_system(instance, auto_ingest_system, use_gravity, text_enc)
+
         return instance
 
     # --- Write operations ---
@@ -637,94 +630,18 @@ class Hologram:
         auto_ingest_system: bool = True,  # NEW: Auto-load system concepts
     ):
         store = MemoryStore.load(path)
+        text_enc, img_enc, _ = cls._resolve_encoders(
+            encoder_mode, store.vec_dim, use_clip, model_name, pretrained)
 
-        # Encoder setup logic (duplicated from init, should refactor but inline for now)
-        text_enc = None
-        img_enc = None
-        
-        # 1. Resolve Text Encoder
-        if encoder_mode == "minilm":
-            text_enc = TextMiniLM()
-        elif encoder_mode == "hash":
-            text_enc = TextHasher(dim=store.vec_dim)
-        elif encoder_mode == "clip" or (encoder_mode == "default" and use_clip):
-            if torch is None or open_clip is None:
-                raise RuntimeError("CLIP requested but dependencies missing.")
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            model, _, preprocess = open_clip.create_model_and_transforms(
-                model_name, pretrained=pretrained, device=device
-            )
-            embed_dim = get_clip_embed_dim(model)
-            if embed_dim != store.vec_dim:
-                 # Warn but allow if user knows what they are doing? 
-                 # Or maybe store.vec_dim is 384 (MiniLM) and we try to load CLIP (512).
-                 # This will crash later.
-                 pass
-            text_enc = TextCLIP(model=model, device=device)
-            img_enc = ImageCLIP(model=model, preprocess=preprocess, device=device)
-        else:
-            # Fallback default -> hash
-            text_enc = TextHasher(dim=store.vec_dim)
-
-        # 2. Resolve Image Encoder
-        if img_enc is None:
-            img_enc = ImageStub(dim=store.vec_dim)
-
-        # Use the gravity state from the store if available, otherwise create new
+        # Restore gravity state from store if available
+        field = None
         if use_gravity and hasattr(store, 'sim') and store.sim is not None:
-            # Wrap the existing Gravity instance in a GravityField
             field = GravityField(dim=store.vec_dim)
-            field.sim = store.sim  # Use the restored gravity state
+            field.sim = store.sim
         elif use_gravity:
             field = GravityField(dim=store.vec_dim)
-        else:
-            field = None
-            
-        manifold = LatentManifold(dim=store.vec_dim)
 
-        glyphs_reg = GlyphRegistry(store)
-        router = GlyphRouter(store, glyphs_reg, gravity_field=field)
-
-        instance = cls(
-            store=store,
-            glyphs=glyphs_reg,
-            text_encoder=text_enc,
-            image_encoder=img_enc,
-            manifold=manifold,
-            field=field,
-            router=router,
-            project="default"
-        )
-        
-        # NEW: Auto-ingest system concepts as Tier 2 (same logic as init)
-        if auto_ingest_system and use_gravity and field:
-            from .system_kb import get_system_concepts
-            from .text_utils import extract_concepts
-            
-            # Check if system concepts already exist (e.g., from loaded state)
-            existing_system_concepts = [
-                name for name in field.sim.concepts.keys()
-                if name.startswith("system:") and field.sim.concepts[name].tier == 2
-            ]
-            
-            # Only ingest if no system concepts found
-            if not existing_system_concepts:
-                system_text = get_system_concepts()
-                concepts = extract_concepts(system_text)
-                
-                for concept_text in concepts:
-                    concept_vec = instance.manifold.align_text(concept_text, text_enc)
-                    concept_id = f"system:{abs(hash(concept_text))%10**10}"
-                    
-                    instance.field.add(
-                        concept_id,
-                        concept_vec,
-                        tier=2,  # Tier 2: System concepts
-                        project="hologram",
-                        origin="system_design"
-                    )
-        
+        instance = cls._build_instance(store, text_enc, img_enc,
+                                       use_gravity, field)
+        cls._auto_ingest_system(instance, auto_ingest_system, use_gravity, text_enc)
         return instance
-    # def init_memory(self, save_path="data/smi_state.json"):
-    #     self.smi = SymbolicMemoryInterface(self.store, self.glyphs, save_path=save_path)
-    #     return self.smi

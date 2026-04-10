@@ -42,7 +42,7 @@ class GlyphOperator:
         glyph_id: Unique glyph identifier (used to derive rotation seed)
         dim: Input embedding dimension
         k: Output subspace dimension (default: dim // 8, min 8)
-        use_projection: If True, apply R_g + P_k. If False, identity (Phase 1 compat)
+        use_projection: If True, apply R_g + P_k. If False, pass-through (no transform)
     """
 
     def __init__(self, glyph_id: str, dim: int, k: Optional[int] = None,
