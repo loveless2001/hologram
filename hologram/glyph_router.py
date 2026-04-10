@@ -70,10 +70,13 @@ class GlyphRouter:
     """Routes queries through glyph-conditioned subspaces for targeted retrieval."""
 
     def __init__(self, store: MemoryStore, glyphs: GlyphRegistry,
-                 gravity_field=None):
+                 gravity_field=None, use_projection: bool = True,
+                 projection_k: int = None):
         self._store = store
         self._glyphs = glyphs
         self._gravity = gravity_field
+        self._use_projection = use_projection
+        self._projection_k = projection_k
         self._operators: Dict[str, GlyphOperator] = {}
         self._shards: Dict[str, GlyphShardIndex] = {}
         self._dirty: bool = True
@@ -124,8 +127,9 @@ class GlyphRouter:
         self._shards.clear()
 
         for g in all_glyphs:
-            # Create operator for this glyph (identity in Phase 1)
-            op = GlyphOperator(g.glyph_id, dim)
+            # Create glyph-specific operator with rotation + projection
+            op = GlyphOperator(g.glyph_id, dim, k=self._projection_k,
+                               use_projection=self._use_projection)
             self._operators[g.glyph_id] = op
 
             # Collect traces for this glyph

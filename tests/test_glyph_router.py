@@ -43,23 +43,42 @@ def multi_domain_setup():
 
 class TestGlyphOperator:
     def test_identity_transform_query(self):
-        op = GlyphOperator("test", DIM)
+        op = GlyphOperator("test", DIM, use_projection=False)
         vec = np.random.randn(DIM).astype("float32")
         assert np.array_equal(op.transform_query(vec), vec)
 
     def test_identity_transform_trace(self):
-        op = GlyphOperator("test", DIM)
+        op = GlyphOperator("test", DIM, use_projection=False)
         vec = np.random.randn(DIM).astype("float32")
         assert np.array_equal(op.transform_trace(vec), vec)
 
-    def test_output_dim(self):
-        op = GlyphOperator("test", 384)
+    def test_identity_output_dim(self):
+        op = GlyphOperator("test", 384, use_projection=False)
         assert op.output_dim == 384
+
+    def test_projection_reduces_dim(self):
+        op = GlyphOperator("test", DIM, k=8, use_projection=True)
+        vec = np.random.randn(DIM).astype("float32")
+        out = op.transform_query(vec)
+        assert len(out) == 8
+        assert op.output_dim == 8
+
+    def test_different_glyphs_different_rotations(self):
+        vec = np.random.randn(DIM).astype("float32")
+        op_a = GlyphOperator("physics", DIM, k=8, use_projection=True)
+        op_b = GlyphOperator("biology", DIM, k=8, use_projection=True)
+        assert not np.allclose(op_a.transform_query(vec), op_b.transform_query(vec))
+
+    def test_deterministic_rotation(self):
+        vec = np.random.randn(DIM).astype("float32")
+        op1 = GlyphOperator("test", DIM, k=8, use_projection=True)
+        op2 = GlyphOperator("test", DIM, k=8, use_projection=True)
+        assert np.allclose(op1.transform_query(vec), op2.transform_query(vec))
 
 
 class TestGlyphShardIndex:
     def test_build_and_search(self):
-        op = GlyphOperator("test", DIM)
+        op = GlyphOperator("test", DIM, k=8, use_projection=True)
         shard = GlyphShardIndex("test", op)
 
         traces = []
@@ -71,13 +90,15 @@ class TestGlyphShardIndex:
         assert shard.index is not None
         assert len(shard.trace_ids) == 3
 
-        results = shard.search(traces[0].vec, top_k=2)
+        # Search with transformed query (shard expects projected vectors)
+        q_transformed = op.transform_query(traces[0].vec)
+        results = shard.search(q_transformed, top_k=2)
         assert len(results) > 0
         # First result should be the query trace itself (highest cosine)
         assert results[0][0] == "t_0"
 
     def test_empty_build(self):
-        op = GlyphOperator("test", DIM)
+        op = GlyphOperator("test", DIM, use_projection=False)
         shard = GlyphShardIndex("test", op)
         shard.build([])
         assert shard.index is None
