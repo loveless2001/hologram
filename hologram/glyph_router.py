@@ -9,6 +9,7 @@ Supports both identity mode (use_projection=False) and real subspace
 transforms (use_projection=True) via GlyphOperator. Router logic is
 independent of transform implementation.
 """
+from dataclasses import dataclass
 import numpy as np
 import faiss
 from typing import Dict, List, Tuple, Optional
@@ -16,6 +17,18 @@ from typing import Dict, List, Tuple, Optional
 from .glyph_operator import GlyphOperator
 from .store import MemoryStore, Trace
 from .glyphs import GlyphRegistry
+
+
+@dataclass
+class RoutingDecision:
+    should_route: bool
+    reason: str
+    total_glyphs: int
+    routable_glyphs: int
+    total_traces: int
+    min_routable_glyphs: int
+    min_traces_per_glyph: int
+    min_total_traces: int
 
 
 class GlyphShardIndex:
@@ -219,6 +232,66 @@ class GlyphRouter:
 
         return basis[:k].astype("float32")
 
+    def decide_routing(
+        self,
+        min_routable_glyphs: int = 2,
+        min_traces_per_glyph: int = 3,
+        min_total_traces: int = 8,
+    ) -> RoutingDecision:
+        """Decide whether routed retrieval is worth using for current store state.
+
+        The current gate is intentionally conservative:
+        - route only if there are enough total traces
+        - route only if there are enough nontrivial glyphs
+        - a "nontrivial" glyph must hold at least `min_traces_per_glyph` traces
+
+        This keeps tiny or doc-per-glyph corpora on the cheaper global path.
+        """
+        self._ensure_shards()
+
+        trace_counts = [len(shard.trace_ids) for shard in self._shards.values()
+                        if len(shard.trace_ids) > 0]
+        total_glyphs = len(trace_counts)
+        total_traces = sum(trace_counts)
+        routable_glyphs = sum(
+            1 for count in trace_counts if count >= min_traces_per_glyph
+        )
+
+        if total_traces < min_total_traces:
+            return RoutingDecision(
+                should_route=False,
+                reason="too_few_total_traces",
+                total_glyphs=total_glyphs,
+                routable_glyphs=routable_glyphs,
+                total_traces=total_traces,
+                min_routable_glyphs=min_routable_glyphs,
+                min_traces_per_glyph=min_traces_per_glyph,
+                min_total_traces=min_total_traces,
+            )
+
+        if routable_glyphs < min_routable_glyphs:
+            return RoutingDecision(
+                should_route=False,
+                reason="too_few_populated_glyphs",
+                total_glyphs=total_glyphs,
+                routable_glyphs=routable_glyphs,
+                total_traces=total_traces,
+                min_routable_glyphs=min_routable_glyphs,
+                min_traces_per_glyph=min_traces_per_glyph,
+                min_total_traces=min_total_traces,
+            )
+
+        return RoutingDecision(
+            should_route=True,
+            reason="route",
+            total_glyphs=total_glyphs,
+            routable_glyphs=routable_glyphs,
+            total_traces=total_traces,
+            min_routable_glyphs=min_routable_glyphs,
+            min_traces_per_glyph=min_traces_per_glyph,
+            min_total_traces=min_total_traces,
+        )
+
     def search_routed(self, query_vec: np.ndarray, top_k: int = 5,
                       top_glyphs: int = 2, fallback_global: bool = True,
                       min_glyph_score: float = 0.0) -> List[Tuple[str, float]]:
@@ -270,3 +343,31 @@ class GlyphRouter:
                         break
 
         return results[:top_k]
+
+    def search_adaptive(
+        self,
+        query_vec: np.ndarray,
+        top_k: int = 5,
+        top_glyphs: int = 2,
+        fallback_global: bool = True,
+        min_glyph_score: float = 0.0,
+        min_routable_glyphs: int = 2,
+        min_traces_per_glyph: int = 3,
+        min_total_traces: int = 8,
+    ) -> List[Tuple[str, float]]:
+        """Use routed search only when the current shard layout justifies it."""
+        decision = self.decide_routing(
+            min_routable_glyphs=min_routable_glyphs,
+            min_traces_per_glyph=min_traces_per_glyph,
+            min_total_traces=min_total_traces,
+        )
+        if not decision.should_route:
+            return self._store.search_traces(query_vec, top_k=top_k)
+
+        return self.search_routed(
+            query_vec,
+            top_k=top_k,
+            top_glyphs=top_glyphs,
+            fallback_global=fallback_global,
+            min_glyph_score=min_glyph_score,
+        )

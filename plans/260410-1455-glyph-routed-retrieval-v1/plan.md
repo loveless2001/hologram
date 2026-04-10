@@ -2,7 +2,7 @@
 
 ## Status: PHASES 1-4 COMPLETE
 ## Priority: HIGH
-## North-Star Spec: ChatGPT "Glyph-Conditioned Spectral Memory" doc (mg2.md)
+## North-Star Spec: "Glyph-Conditioned Spectral Memory"
 
 ## Summary
 Redesign Hologram's retrieval architecture so glyphs act as **operators on retrieval geometry** — not labels. Queries route through glyph-conditioned subspaces; mass becomes context-dependent salience. Existing gravity/physics code becomes scaffolding, not the center.

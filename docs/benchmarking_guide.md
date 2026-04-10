@@ -1,281 +1,90 @@
-# Benchmarking Your Holographic Memory System
+# Benchmarking Guide
 
-## Quick Start
+Last updated: 2026-04-10
 
-```bash
-python scripts/profile_ingest.py
-python scripts/profile_search.py
-```
+This repo now has several benchmark paths. They do not answer the same question, so keep them separate.
 
-This will run the performance profiling suite and output results to `perf/baseline-vX.json`.
+## Benchmark Types
 
----
+### Routed retrieval controls
 
-## What Gets Measured?
+Use these first when evaluating glyph routing itself:
 
-### 1. **Retrieval Quality** (How good is search?)
-- **Precision@10**: Of the top 10 results, how many are relevant?
-- **Recall@10**: Of all relevant items, how many are in top 10?
-- **MRR (Mean Reciprocal Rank)**: How quickly is the first relevant result found?
+- `tests/benchmark-glyph-routing-vs-global.py`
+- `tests/benchmark-glyph-routing-minilm-real-text.py`
 
-**Target**: Precision > 0.7, Recall > 0.5, MRR > 0.6
+Use the synthetic benchmark to validate routing mechanics and shard behavior.
 
-### 2. **Gravity Field Behavior** (Does physics work?)
-- **Attraction Score**: Do positive statements pull concepts together?
-- **Repulsion Score**: Do negative statements push concepts apart?
+Use the MiniLM real-text benchmark to decide whether a routing or basis change actually improves retrieval quality on realistic embeddings.
 
-**Target**: Attraction > 1.0, Repulsion < 1.0
+### External retrieval benchmarks
 
-### 3. **Temporal Dynamics** (Does memory decay work?)
-- **Decay Half-Life**: How many steps until concept loses 50% mass?
-- **Reinforcement Gain**: How much do reinforced concepts strengthen?
+Use these when you want public-dataset retrieval numbers:
 
-**Target**: Half-life 20-50 steps, Reinforcement gain 1.5-2.0x
+- `scripts/benchmark_beir.py`
+- `scripts/benchmark_timeqa_e2e.py`
+- `scripts/benchmark_timeqa_stream.py`
 
-### 4. **Efficiency** (How fast?)
-- **Query Latency**: Average time to search (milliseconds)
-- **Indexing Throughput**: Concepts added per second
+### End-to-end QA benchmarks
 
-**Target**: Latency < 100ms, Throughput > 100 concepts/sec
+Use these when retrieval is only one part of the system being tested:
 
----
+- `scripts/benchmark_ragbench_e2e.py`
 
-## Custom Benchmarks
+## Recommended Evaluation Order
 
-### Example: Test Your Own Knowledge Base
+1. Validate mechanics with the synthetic routed benchmark
+2. Check quality on the MiniLM real-text benchmark
+3. If the idea still looks good, compare on public datasets such as BEIR
+4. Only then move to end-to-end QA benchmarks
 
-```python
-from hologram import Hologram
-from benchmark import HologramBenchmark
+This avoids treating generator noise as a retrieval result.
 
-# Build your knowledge base
-hg = Hologram.init(encoder_mode="minilm", use_gravity=True)
-hg.glyphs.create("physics", title="Physics")
+## Latency Interpretation
 
-# Add knowledge
-hg.add_text("physics", "Mass increases with velocity")
-hg.add_text("physics", "Energy equals mass times c squared")
-# ... add more
+Be careful with routed-query timing.
 
-# Define test queries with ground truth
-test_data = {
-    'retrieval_queries': [
-        ("what happens to mass at high speed", ["trace_id_1", "trace_id_2"]),
-        ("energy mass relationship", ["trace_id_3"]),
-    ],
-    'positive_triplets': [
-        ("Mass", "increases with", "Velocity"),
-    ],
-    'negative_triplets': [
-        ("Mass", "independent of", "Color"),
-    ],
-    'performance_queries': [
-        "what is energy",
-        "how does mass behave",
-    ]
-}
+Routed retrieval can include:
+- lazy shard construction
+- operator initialization
+- projection setup
+- trace transformation and FAISS index build
 
-# Run benchmark
-benchmark = HologramBenchmark(hg)
-results = benchmark.run_full_suite(test_data)
-```
+Because of that, the first routed query is often a cold-path measurement, not a steady-state query measurement.
 
----
+For projected operators, cold-path timing can include substantial setup work that should not be compared directly to warm query latency.
 
-## Interpreting Results
+## Metrics That Matter Most
 
-### Good Signs ✓
-- Attraction score > 1.0: Concepts drift together when linked
-- Repulsion score < 1.0: Negation pushes concepts apart
-- Reinforcement gain > 1.5: Frequent access keeps concepts strong
-- Query latency < 50ms: Fast enough for interactive use
+For routed retrieval experiments, prioritize:
+- recall
+- interference rate
+- routing accuracy
+- warm query latency
 
-### Warning Signs ⚠️
-- Attraction score < 1.0: Gravity field may not be working
-- Decay half-life = None: Concepts not decaying (check isolation_drift param)
-- Very low precision/recall: May need better embeddings or more data
+For public retrieval benchmarks, prioritize:
+- `NDCG@10`
+- `Recall@100`
+- `MRR@10`
 
-### Red Flags ✗
-- Both attraction AND repulsion > 1.0: Something is broken
-- Query latency > 500ms: FAISS index may need optimization
-- Reinforcement gain < 1.0: Concepts losing mass despite reinforcement
+For end-to-end QA benchmarks, separate:
+- retrieval quality
+- answer quality
+- grounding / support metrics
 
----
-
-## Glyph-Routed Retrieval Benchmarks
-
-Glyph-routed retrieval (`search_routed()`) can be benchmarked against global search (`search_text()`) using the included benchmark scripts:
+## Minimal Command Set
 
 ```bash
-# Synthetic vector benchmark (fast, tests routing mechanism)
 python tests/benchmark-glyph-routing-vs-global.py
-
-# MiniLM real-text benchmark (tests with semantic embeddings)
 python tests/benchmark-glyph-routing-minilm-real-text.py
+python scripts/benchmark_beir.py --dataset scifact --split test --download
+python scripts/benchmark_ragbench_e2e.py --subset hotpotqa --split test --limit 30 --top-k 5 --generator extractive
 ```
 
-### Key Metrics for Routed Retrieval
-| Metric | Description | Target |
-|--------|-------------|--------|
-| Recall@5 | Fraction of relevant results in top-5 | >= global baseline |
-| Interference Rate | Fraction of cross-domain results in top-5 | < global baseline |
-| Routing Accuracy | Correct glyph inferred from query | > 80% |
-| Fallback Rate | How often global fallback is needed | < 20% |
+## Reporting Guidance
 
-### Discriminant Basis Results (MiniLM, 3 domains x 15 traces)
-| Method | Recall@5 | Interference |
-|--------|----------|--------------|
-| Global baseline | 0.867 | 0.133 |
-| Routed (identity) | 0.867 | 0.133 |
-| Discriminant (k=48) | **0.987** | **0.013** |
-
-**Latency note**: Routed search uses lazy shard construction. First query includes cold-path overhead (operator build, trace transforms, FAISS index). Steady-state query latency is lower.
-
----
-
-## Comparing Against Baselines
-
-To compare with traditional approaches:
-
-```python
-# Your holographic system
-hg = Hologram.init(encoder_mode="minilm", use_gravity=True)
-# ... add data ...
-bench_holo = HologramBenchmark(hg)
-results_holo = bench_holo.run_full_suite(test_data)
-
-# Pure vector DB (no gravity, no decay)
-hg_baseline = Hologram.init(encoder_mode="minilm", use_gravity=False)
-# ... add same data ...
-bench_baseline = HologramBenchmark(hg_baseline)
-results_baseline = bench_baseline.run_full_suite(test_data)
-
-# Compare
-print(f"Holographic MRR: {results_holo['MRR']:.3f}")
-print(f"Baseline MRR:    {results_baseline['MRR']:.3f}")
-```
-
----
-
-## Standard Test Datasets
-
-### 1. **Synthetic Cluster Test**
-
-Tests if concepts naturally cluster by topic:
-
-```python
-# Create 3 clusters
-physics_concepts = ["gravity", "mass", "velocity", ...]
-biology_concepts = ["cell", "DNA", "protein", ...]
-history_concepts = ["war", "treaty", "empire", ...]
-
-# Add all
-for c in physics_concepts + biology_concepts + history_concepts:
-    hg.add_text("test", c)
-
-# Measure: Do physics concepts cluster together?
-# Use silhouette score or manual inspection
-```
-
-### 2. **Negation Test**
-
-Tests if negation creates repulsion:
-
-```python
-test_data = {
-    'negative_triplets': [
-        ("Hot", "opposite of", "Cold"),
-        ("Up", "opposite of", "Down"),
-        ("Good", "opposite of", "Bad"),
-    ]
-}
-
-# Expected: Repulsion score < 1.0 (concepts push apart)
-```
-
-### 3. **Temporal Decay Test**
-
-Tests if old concepts fade:
-
-```python
-# Add concept, then add 100 other concepts without reinforcing it
-# Measure: mass should decrease over time
-```
-
----
-
-## Metrics Dashboard
-
-For continuous monitoring, track these over time:
-
-| Metric | Target | Critical | Notes |
-|--------|--------|----------|-------|
-| Precision@10 | > 0.7 | < 0.3 | Core retrieval quality |
-| MRR | > 0.6 | < 0.2 | First result quality |
-| Attraction | > 1.0 | < 0.9 | Gravity working? |
-| Repulsion | < 1.0 | > 1.1 | Negation working? |
-| Query latency | < 100ms | > 500ms | User experience |
-| Half-life | 20-50 | < 5 or > 200 | Decay tuning |
-
----
-
-## Contributing Your Results
-
-If you run benchmarks on interesting datasets, please share:
-
-1. Run benchmark: `python benchmark.py`
-2. Export results: `benchmark_results.json`
-3. Document:
-   - Dataset size
-   - Domain (physics, history, etc.)
-   - Any custom parameters
-4. Submit as GitHub issue or PR
-
-Example format:
-```markdown
-## Benchmark Results: Wikipedia Physics (1000 concepts)
-
-- Precision@10: 0.82
-- Recall@10: 0.65
-- MRR: 0.74
-- Attraction: 1.15
-- Repulsion: 0.87
-- Avg latency: 12ms
-
-Notes: Used CLIP embeddings, decay params at default.
-```
-
----
-
-## Troubleshooting
-
-**Q: Attraction score is < 1.0, why?**  
-A: Check if `use_gravity=True` in `Hologram.init()`. Also verify `eta` parameter.
-
-**Q: Nothing is decaying (half-life = None)?**  
-A: Need to call `hg.decay(steps=N)` or increase `isolation_drift` parameter.
-
-**Q: Query latency very high?**  
-A: FAISS should be sub-linear. Check dataset size and indexing method.
-
-**Q: Low precision/recall?**  
-A: May need:
-- Better embeddings (try use_clip=True with actual CLIP)
-- More data (< 100 concepts may not cluster well)
-- Tuned decay parameters
-
----
-
-## Phase 4.5 Performance Scripts
-
-For detailed performance profiling, use the scripts in `scripts/`:
-
-- `scripts/profile_ingest.py`: Measures ingestion speed (lines/sec)
-- `scripts/profile_search.py`: Measures search and visualization latency
-- `scripts/build_kb.py`: Concurrent ingestion pipeline for large KBs
-
-See `perf/README.md` for more details.
-
----
-
-For detailed metric definitions, see `/docs/performance_metrics.md`.
+When writing up results:
+- say whether the benchmark is synthetic, real-text, public retrieval, or end-to-end QA
+- say whether timing is cold or warm
+- do not describe a shared discriminant basis as full per-glyph learned `R_g`
+- do not treat GLiNER or symbolic extraction changes as retrieval wins unless the benchmark actually tests them

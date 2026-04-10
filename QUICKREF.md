@@ -45,6 +45,8 @@ curl -X POST "http://localhost:8000/query" \
 - [x] `/ingest/code` - Ingest source code file (extracts symbols)
 - [x] `/query` - Probe-based semantic query
 - [x] `/query/code` - Query specifically for code concepts
+- [x] `/kg/build_batch` - Build batch semantic knowledge graph snapshot
+- [x] `/drift/compare` - Compare baseline vs target batches (embedding + KG drift)
 - [x] `/memory/{project}` - Get memory summary
 - [x] `/save/{project}` - Save project memory
 - [x] `/load/{project}` - Load project memory
@@ -253,6 +255,9 @@ Currently stored: ~20 concepts from relativity.txt
 ---
 
 ## 🔮 Future Enhancements (Not Implemented)
+
+Resume reference for KG + Drift pivot:
+- `docs/legacy/kg_drift_resume.md`
 
 ### Short-term
 - [ ] Improve verb extraction (custom relation model?)

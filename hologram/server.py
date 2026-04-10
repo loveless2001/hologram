@@ -351,6 +351,31 @@ async def query_routed(req: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/query/adaptive")
+async def query_adaptive(req: QueryRequest):
+    """
+    Adaptive retrieval — uses global search for sparse corpora and routed retrieval
+    once glyph shards are populated enough to justify it.
+    """
+    if req.project not in hologram_instances:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{req.project}' not found. Ingest some data first."
+        )
+    try:
+        holo = hologram_instances[req.project]
+        results = holo.search_adaptive(req.text, top_k=req.top_k)
+        return {
+            "query": req.text,
+            "results": [
+                {"trace_id": t.trace_id, "content": t.content, "score": round(s, 4)}
+                for t, s in results
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/query/code")
 async def query_code(req: QueryCodeRequest):
     """

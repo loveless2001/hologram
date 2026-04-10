@@ -19,6 +19,8 @@ This directory contains test scripts for validation, integration testing, and fe
 
 ### Utility Scripts
 - **`benchmark.py`** - Performance benchmarking
+- **`benchmark-glyph-routing-vs-global.py`** - Synthetic control benchmark for routed vs global retrieval
+- **`benchmark-glyph-routing-minilm-real-text.py`** - Real-text MiniLM benchmark for routed vs global retrieval
 - **`check_cuda.py`** - CUDA availability check
 
 ## Running Tests
@@ -45,7 +47,17 @@ python tests/test_search_relations.py
 ### Run Benchmarks
 ```bash
 python tests/benchmark.py
+python tests/benchmark-glyph-routing-vs-global.py
+python tests/benchmark-glyph-routing-minilm-real-text.py
 ```
+
+## Benchmark Notes
+
+- `benchmark-glyph-routing-vs-global.py` is the synthetic control. It is mainly useful for validating routing mechanics and shard behavior under known separability.
+- `benchmark-glyph-routing-minilm-real-text.py` is the more realistic decision gate for glyph routing and subspace transforms on MiniLM embeddings.
+- Routed benchmarks use lazy shard construction. Unless a script explicitly warms the router before timing, the first routed query includes cold-path setup cost.
+- For projected operators (`R_g + P_k`), cold-path latency can include QR decomposition, trace transforms, and shard/index construction. Do not compare those numbers directly to warm steady-state query latency.
+- Treat benchmark output as quality evidence first, latency evidence second, unless the script reports warm-query timing separately.
 
 ## Test Categories
 

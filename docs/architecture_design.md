@@ -1,437 +1,150 @@
-# Hologram: Architectural Design
+# Hologram Architecture
 
-> **Version**: 1.0.0
-> **Date**: 2025-11-27
-> **Status**: Active Research
+Last updated: 2026-04-10
 
-## 1. System Philosophy: "Memory as Gravity"
+## Overview
 
-Traditional knowledge graphs treat memory as static storage: nodes are created, edges are explicitly defined, and retrieval is a lookup process. **Hologram** fundamentally rejects this model.
+Hologram is currently organized around chunked trace ingestion and glyph-routed retrieval.
 
-In Hologram, **memory is a gravitational field**.
-- **Concepts** are massive bodies that warp the semantic space around them.
-- **Relations** are not explicit links, but the result of gravitational attraction between concepts.
-- **Retrieval** is not a search, but a simulation: we drop a "probe" (query) into the field and see where it drifts.
-- **Structure** is emergent. It forms dynamically as concepts clump together (clustering) or split apart (mitosis) under the pressure of new information.
+The default architecture is:
 
-This approach allows the system to handle ambiguity, contradiction, and evolution naturally, mirroring the fluid nature of human memory.
+`document -> chunks -> embeddings -> glyph-local traces -> routed retrieval`
 
-## 2. Architectural Layers
+The project still contains gravity, symbolic extraction, and diagnostic layers, but those are now secondary to the routed retrieval path rather than the primary top-level story.
 
-The system is composed of distinct but interacting layers, moving from raw text preprocessing to symbolic structure.
+## Design Priorities
 
-### Layer 0: Text Normalization & Coreference Resolution (Text Preprocessing)
-**Goal**: Clean noisy input and resolve pronouns before encoding to prevent concept fragmentation.
+### 1. Chunk-first ingestion
 
-#### Stage 1: Normalization Pipeline
-**Responsibility**: Clean and normalize text before it enters the semantic field.
+Large documents should enter the system through `Hologram.ingest_document(...)`, not as one giant trace.
 
-- **Stage 0 - Tokenization**: Strip unicode artifacts, normalize spaces, canonicalize code tokens (`::`, `->`).
-- **Stage 1 - Spell Correction**: Dictionary-backed correction using **SymSpell**.
-    - **Whitelist Protection**: Checks `Gravity.concepts` to avoid correcting existing domain terms (e.g., "QFT", "SM").
-    - **Conservative**: Only corrects high-confidence errors to prevent false positives.
-- **Stage 2 - Contextual Rewrite** (Optional, disabled by default): LLM-based micro-correction for multi-token errors (e.g., "event horzon" → "event horizon").
-- **Stage 3 - Manifold Alignment**: Semantic near-neighbor mapping.
-    - Embeds unknown tokens and finds nearest concept in gravity field (cosine > 0.65).
-    - Maps "graviti" → "gravity" if semantically close.
-    - **Read-only**: Does not modify the field, only uses it as reference.
-- **Stage 4 - Canonicalization**: Deterministic formatting (lowercase, hyphen/underscore removal).
+Current ingestion flow:
+1. Split source text with `hologram/chunking.py`
+2. Optionally normalize text and resolve coreference
+3. Batch-embed chunk texts
+4. Store chunk traces under a glyph
+5. Invalidate and lazily rebuild glyph shards when needed
 
-**Example Flow**:
-```
-Input:  "The gravty feild colapses when drift accumlates."
-Stage 0: "The gravty feild colapses when drift accumlates."
-Stage 1: "The gravity field collapses when drift accumulates." (SymSpell)
-Stage 3: "The gravity field collapses when drift accumulates." (Manifold alignment)
-Stage 4: "the gravity field collapses when drift accumulates." (Canonicalization)
-```
+Important properties:
+- chunk IDs are deterministic from `source_hash + chunk_index`
+- re-ingesting the same document is content-idempotent
+- changed document text produces a new `source_hash`, so replacement is not automatic
 
-#### Stage 2: Coreference Resolution
-**Responsibility**: Resolve pronouns and deictic references in normalized text.
+### 2. Glyph-local retrieval
 
-- **Primary Resolution**: Uses `fastcoref` neural model for structural pronoun resolution.
-- **Gravity Fallback**: Vector-based resolution for ambiguous deictics using concept mass attraction.
-- **Trace Metadata**: Stores both original and resolved text with pronoun→antecedent mappings.
-- **Pipeline Integration**: Runs after normalization to work with clean text.
+The retrieval system is built around:
+- `GlyphOperator` in `hologram/glyph_operator.py`
+- `GlyphRouter` in `hologram/glyph_router.py`
 
-**Use Cases**:
-- **Technical Documentation**: "The engine failed. It was overheating." → "The engine failed. The engine was overheating."
-- **Narrative Text**: "Alice met Bob. She gave him a book." → "Alice met Bob. Alice gave Bob a book."
-- **Deictic References**: "This solved the problem." → Maps "This" to nearest concept via gravity.
+Current routed retrieval flow:
+1. Embed the query
+2. Infer likely glyphs from glyph resonance
+3. Transform the query with each selected glyph operator
+4. Search that glyph's FAISS shard
+5. Merge results across selected glyphs
+6. Optionally fall back to global trace search
 
-**Key Components**: 
-- `normalization` (`hologram/normalization.py`) - **New in v1.5**
-- `coref` (`hologram/coref.py`)
-- Configurable via `Config.coref.ENABLE_COREF` and `Config.coref.ENABLE_GRAVITY_FALLBACK`.
+Current operator modes:
+- identity / no projection
+- random orthogonal projection
+- shared discriminant basis learned from glyph centroids
 
-### Layer 1: The Manifold (Encoding)
-**Goal**: Unify all inputs (text, images, search queries) into a single, consistent, normalized vector space.
+The discriminant basis result is the first meaningful quality win in the current architecture. It should be described accurately as a shared discriminant projection combined with glyph shard routing, not as full per-glyph learned `R_g`.
 
-- **Responsibility**:
-    - Encodes raw data (after coreference resolution) into high-dimensional vectors.
-    - Projects vectors onto a unit hypersphere (L2 normalization).
-    - Aligns different modalities (e.g., CLIP for images, GLiNER/SentenceTransformers for text) into a shared latent space.
-    - **New in v1.1**: Supports `TextMiniLM` (via `sentence-transformers`) for high-quality semantic embeddings, replacing random hashing as the default.
-- **Key Component**: `LatentManifold` (`hologram/manifold.py`)
-    - Acts as the gatekeeper. No vector enters the system without passing through the Manifold.
+### 3. Deterministic identifiers
 
-### Layer 2: The Field (Physics)
-**Goal**: Simulate the semantic interactions between concepts.
+Persistent auto-generated IDs now use stable digest-based helpers rather than Python `hash()`.
 
-- **Responsibility**:
-    - Manages a collection of "Concepts" (nodes with vector + mass).
-    - Calculates gravitational forces, forces are computed over the cosine geometry of the manifold (e.g., similarity and distance).
-    - Updates positions: Concepts drift towards similar neighbors.
-    - **Mitosis**: Detects when a concept is "pulled apart" by opposing meanings (bimodal distribution of neighbors) and splits it into two distinct variants (e.g., "bank_finance" vs "bank_river").
-- **Key Component**: `GravityField` / `Gravity` (`hologram/gravity.py`)
-    - The physics engine.
-    - Uses **FAISS K-means** for geometry-based mitosis detection.
-    - **New in v1.1**: Vectorized `_mutual_drift` (matrix operations) and PCA caching for <5ms visualization.
+That applies to:
+- auto-generated text/image/concept/system IDs
+- auto-generated document glyph IDs
+- chunk `source_hash`
+- stable seeds used by glyph projection logic
 
-### Layer 3: The Graph (Symbolic) + Glyph-Conditioned Retrieval
-**Goal**: Provide stable, human-readable anchors for the fluid physics layer, and route retrieval through glyph-conditioned subspaces.
+### 4. Optional symbolic and physics layers
 
-- **Responsibility**:
-    - Manages **Glyphs**: Permanent symbolic identifiers (e.g., "User", "Project X", "🝞").
-    - Glyphs are not static labels; they are **operators on retrieval geometry**.
-    - **Glyph Physics**:
-        - **Vector**: Centroid of all traces attached to the glyph.
-        - **Mass**: Logarithmic growth based on trace count ($M = 1 + 0.75 \ln(1 + N)$).
-    - **Glyph-Conditioned Retrieval** (new):
-        - **GlyphOperator**: Each glyph defines a transform $T_g(z) = P_k R_g z$ that projects vectors into a glyph-specific subspace.
-        - **GlyphRouter**: Infers which glyphs are relevant to a query, searches per-glyph FAISS shard indexes, and merges results.
-        - **Discriminant Basis**: Centroid-based discriminant projection finds directions that maximally separate glyphs. Shared across all operators.
-        - **Benchmark result**: +14% recall, 90% interference reduction vs global cosine on MiniLM real-text embeddings.
-        - Supports identity mode (no transform), random orthogonal R_g, and learned discriminant basis.
-- **Key Components**: `GlyphRegistry` (`hologram/glyphs.py`), `GlyphOperator` (`hologram/glyph_operator.py`), `GlyphRouter` (`hologram/glyph_router.py`)
+The repo still includes:
+- gravity-field dynamics
+- probe-based retrieval
+- GLiNER-backed symbolic extraction
+- code-map ingestion
+- KG/drift experiments
+- MG scorer and cost engine diagnostics
 
-### Layer 4: Storage (Persistence)
-**Goal**: Efficiently store and retrieve the state of the holographic field.
+These are real modules, but they are not the default ingestion or retrieval story.
 
-- **Responsibility**:
-    - Persists Traces, Glyphs, and Gravity State.
-    - Supports pluggable backends.
-- **Backends**:
-    - **SQLite**: Default backend, scalable, disk-based, supports partial loading. Good for production and large KBs (>100k items).
-    - **JSON**: Legacy format, human-readable, loads entirely into RAM. Good for small KBs and debugging.
-- **Key Component**: `MemoryStore` (`hologram/store.py`) & `SqliteBackend` (`hologram/storage/sqlite_store.py`)
+In particular:
+- GLiNER is optional enrichment, not a required dependency of the main retrieval design
+- gravity/probe retrieval remains experimental and parallel to routed retrieval
+- code mapping is a specialized ingestion path, not the core document path
 
-### Layer 4.5: Code Mapping (Source Code Intelligence)
-**Goal**: Extract and map source code symbols to semantic concepts with precise source locations.
-
-- **Responsibility**:
-    - Parses Python source files using AST (Abstract Syntax Tree).
-    - Extracts classes, functions, methods, and their docstrings.
-    - Maps each symbol to a concept with file path and line span metadata.
-    - Generates semantic vectors from symbol names and documentation.
-    - Integrates code concepts into the Gravity Field with fusion protection.
-- **Components**:
-    - **Parser** (`hologram/code_map/parser.py`): AST-based extraction of code structure.
-    - **Extractor** (`hologram/code_map/extractor.py`): Symbol normalization and concept ID generation.
-    - **Mapper** (`hologram/code_map/mapper.py`): Concept-to-Glyph mapping with source metadata.
-- **Key Features**:
-    - **Precise Mapping**: Each concept stores `source_file` and `span` (line numbers).
-    - **Fusion Protection**: Code concepts from different files won't merge in the gravity field.
-    - **Semantic Search**: Query code using natural language ("authentication logic" → `authenticate_user()`).
-    - **Docstring Integration**: Function/class documentation becomes part of the concept's semantic representation.
-- **API Integration**:
-    - `Hologram.ingest_code(path)`: Ingest a source file.
-    - `Hologram.query_code(query, top_k)`: Search specifically for code concepts.
-    - Server endpoints: `/ingest/code` and `/query/code`.
-
-### Layer 5: MG Scorer (Quality Metrics)
-**Goal**: Quantify the geometric health and stability of the semantic field.
-
-- **Responsibility**:
-    - Measures **Coherence**: How tightly clustered vectors are (inverse dispersion).
-    - Measures **Curvature**: How linear/smooth semantic trajectories are.
-    - Measures **Entropy**: Semantic dispersion across principal components.
-    - Calculates **Collapse Risk**: Composite instability indicator.
-    - Computes **Gradient**: Direction of semantic tension.
-- **Use Cases**:
-    - **LLM Output Validation**: Detect hallucinations and contradictions.
-    - **Memory Health Monitoring**: Track field stability over time.
-    - **Retrieval Quality Gates**: Filter incoherent search results.
-    - **Topic Drift Detection**: Identify when conversations lose focus.
-- **Key Component**: `mg_scorer` (`hologram/mg_scorer.py`)
-    - **New in v1.2**: Provides geometric analysis of vector sets and sequences.
-    - Integrated into `Hologram` API via `score_text()` and `score_trace()` methods.
-
-## 3. Module Design & Rationale
-
-### `hologram/manifold.py`
-**Rationale**: Early versions suffered from "vector drift" where text and image vectors lived in different scales.
-**Design**:
-- `LatentManifold` class wraps encoders.
-- Enforces `v /= norm(v)` on every input.
-- Provides a single `align_text` / `align_image` API.
-
-### `hologram/gravity.py`
-**Rationale**: We needed a way to make memory "active".
-**Design**:
-- `Concept` dataclass: stores `vec`, `mass`, `count`.
-- `add_concept`:
-    - **Reinforcement**: If concept exists, increase mass (memory consolidation).
-    - **Mitosis**: If concept is new/modified, check if it bridges two distant clusters.
-- `check_mitosis`:
-    - **Old**: Heuristic threshold.
-    - **New**: **Geometry-Based**. Uses `faiss.Kmeans(k=2)` to cluster neighbors. If centroids are far apart, split the concept.
-
-### `hologram/glyphs.py`
-**Rationale**: Pure vector fields are hard to navigate. We need named anchors.
-**Design**:
-- `Glyph`: A named entity that aggregates `Traces`.
-- `attach_trace`:
-    1.  Links trace to glyph.
-    2.  **Recomputes Centroid**: Glyph vector = mean(trace vectors).
-    3.  **Updates Gravity**: Pushes `glyph:{id}` to `GravityField` with updated mass/vector.
-
-### `hologram/glyph_operator.py`
-**Rationale**: The doc spec requires glyphs to define retrieval geometry, not just label traces.
-**Design**:
-- `GlyphOperator`: Per-glyph transform `T_g(z) = basis @ z` projecting into k-dim subspace.
-- Three modes: identity (pass-through), random orthogonal, learned discriminant basis.
-- `learn_from_traces()`: PCA-based learning (for future use with large datasets).
-- `set_basis()`: Accept externally-computed basis (e.g., shared discriminant).
-- Process-stable determinism via `blake2b` seed derivation.
-
-### `hologram/glyph_router.py`
-**Rationale**: Centralize glyph-routed retrieval in one module instead of scattering across store/gravity/api.
-**Design**:
-- `GlyphShardIndex`: Per-glyph FAISS index storing operator-transformed vectors.
-- `GlyphRouter`: Infers glyph distribution via `resonance_score`, searches shard indexes, merges results.
-- `_compute_discriminant_basis()`: SVD on between-glyph centroid scatter matrix for shared discriminant projection.
-- Supports `learn_basis=True` for discriminant mode, `use_projection=True/False` for transform/identity.
+## Current Module Roles
 
 ### `hologram/api.py`
-**Rationale**: A unified facade for the complex subsystems.
-**Design**:
-- `Hologram` class initializes Manifold, Gravity, GlyphRegistry, and GlyphRouter.
-- Shared helpers: `_resolve_encoders()`, `_build_instance()`, `_auto_ingest_system()`.
-- `add_text`:
-    1.  Encode via Manifold.
-    2.  Create Trace -> Attach to Glyph.
-    3.  Extract sub-concepts -> Add to Gravity.
-    4.  Trigger Mitosis checks.
-    5.  Invalidate GlyphRouter shards.
-- `search_routed()`: Glyph-routed retrieval (parallel to `search_text()`).
 
-### `hologram/mg_scorer.py`
-**Rationale**: Need quantitative metrics to assess memory field health and detect semantic collapse.
-**Design**:
-- `MGScore` dataclass: Encapsulates all geometric metrics.
-- Core functions:
-    - `coherence()`: 1 - average cosine distance (all-pairs).
-    - `curvature()`: Straightness index using triangle inequality on ordered sequences.
-    - `semantic_entropy()`: Eigenvalue-based dispersion measure.
-    - `collapse_risk()`: Composite heuristic combining coherence, entropy, and curvature.
-    - `gradient()`: Average deviation from centroid (semantic tension direction).
-- `mg_score()`: Main entry point that computes all metrics for a vector set.
-- **Integration**: `Hologram.score_text()` and `Hologram.score_trace()` expose scoring to API users.
+The top-level facade. It wires encoders, store, glyph registry, gravity field, and glyph router together.
 
-## 4. Data Flow
+Key current methods:
+- `init(...)`
+- `load(...)`
+- `add_text(...)`
+- `ingest_document(...)`
+- `search_routed(...)`
+- `retrieve(...)`
 
-### Ingestion Flow
-1.  **User Input**: `add_text("Project Alpha", "The gravty feild failed. It was unstable.")`
-2.  **Normalization Pipeline** (NEW in v1.5):
-    - **SymSpell**: "gravty feild" → "gravity field"
-    - **Manifold Alignment**: Checks if "gravity field" matches existing concept
-    - **Canonicalization**: "gravity field" → "gravity field"
-    - Output: "The gravity field failed. It was unstable."
-3.  **Coreference Resolution**:
-    - FastCoref resolves "It" → "The gravity field"
-    - Gravity fallback for deictics if needed
-    - Output: "The gravity field failed. The gravity field was unstable."
-4.  **Manifold**: Encodes resolved text → `vec_trace`.
-5.  **Glyph**:
-    - Attaches trace to "Project Alpha".
-    - Recalculates "Project Alpha" centroid & mass.
-    - Pushes "glyph:Project Alpha" to Gravity.
-6.  **Extraction**: GLiNER extracts "gravity field", "failed", "unstable" from resolved text.
-7.  **Gravity**:
-    - Adds concepts (vector + mass).
-    - Links concepts <-> "glyph:Project Alpha" (attraction).
-    - Checks for mitosis (is any concept ambiguous?).
+### `hologram/chunking.py`
 
-### Retrieval Flow
-1.  **User Query**: `search("When is it due?")`
-2.  **Manifold**: Encodes query -> `vec_query`.
-3.  **Gravity**:
-    - Spawns a "Probe" at `vec_query`.
-    - Simulates physics: Probe drifts towards heavy, relevant concepts (e.g., "deadline", "Project Alpha").
-4.  **Subgraph**: Returns the concepts and glyphs that pulled the probe the hardest.
+Defines sentence chunking and chunk metadata:
+- `chunk_index`
+- `char_start`
+- `char_end`
+- `sentence_start`
+- `sentence_end`
+- `source_hash`
 
-## 5. LLM Integration & Symbolic Memory Interface (SMI)
+### `hologram/glyph_operator.py`
 
-### **Purpose**
+Defines the retrieval-time transform `T_g(z)` used by routed retrieval. The interface is intentionally doc-aligned even when using identity or simple projection modes.
 
-The LLM is not the memory itself.
-It is the **interpreter** of the holographic field.
+### `hologram/glyph_router.py`
 
-While the Gravity Field organizes concepts and glyphs into a continuously evolving latent manifold, the LLM reconstructs coherent explanations, narratives, or answers by *reading* the structure of the field in symbolic form.
+Owns shard inference, shard build/invalidation, and routed search behavior. It is the center of the current retrieval architecture.
 
-This is the function of the **SMI — Symbolic Memory Interface**.
+### `hologram/store.py`
 
-### 5.1 SMI Overview: “Field → Symbols → Language”
+Stores traces and glyphs, and provides base vector search. Routed retrieval builds on top of this storage layer.
 
-The SMI provides a bridge between two worlds:
+### `hologram/server.py`
 
-| Layer     | Representation                    | Behavior                       |
-| --------- | --------------------------------- | ------------------------------ |
-| **Field** | Vectors, masses, relations, drift | Physics (continuous evolution) |
-| **Graph** | Concepts, glyphs, adjacency       | Structured symbolic state      |
-| **LLM**   | Natural language                  | Coherent reconstruction        |
+Exposes the main REST surface, including:
+- `/ingest`
+- `/ingest/document`
+- `/query`
+- `/query/routed`
+- `/ingest/code`
+- `/query/code`
 
-The SMI acts as a **translator**:
+### Optional modules
 
-1. Encodes the current state of the Field into a symbolic graph snapshot.
-2. Feeds this snapshot into an LLM.
-3. The LLM synthesizes meaning from the structure — not from hidden weights.
+- `hologram/coref.py` – neural coreference
+- `hologram/text_utils.py` – extraction and normalization helpers
+- `hologram/gravity.py` – gravity field and concept dynamics
+- `hologram/code_map/` – source code ingestion and search
+- `hologram/kg/` and `hologram/drift/` – batch graph and drift experiments
+- `hologram/mg_scorer.py` and `hologram/cost_engine.py` – diagnostics
 
-In other words:
+## Recommended Mental Model
 
-> **The LLM is querying memory, not hallucinating it.**
+Read the system in this order:
 
-### 5.2 Subgraph Extraction (Memory Packet)
+1. `api.py` for the top-level lifecycle
+2. `chunking.py` for the default ingestion unit
+3. `glyph_operator.py` and `glyph_router.py` for the main retrieval path
+4. `store.py` for persistence/search substrate
+5. optional modules only if you need those experiments
 
-Given a query, the system constructs a *Memory Packet* — a JSON-serializable structure representing the most relevant region of the semantic field.
+## Legacy Material
 
-### **Components of a Memory Packet**
+Older gravity-first framing, historical reports, and superseded planning notes were moved under `docs/legacy/`.
 
-```json
-{
-    "seed": "speed of light",
-    "nodes": [
-        {"name": "time dilation", "mass": 1.3, "vector": [...], "age": 12},
-        {"name": "speed of light", "mass": 1.5, "vector": [...], "age": 4}
-    ],
-    "edges": [
-        {"a": "speed of light", "b": "time dilation", "relation": 0.82, "tension": 0.12}
-    ],
-    "glyphs": [
-        {"id": "🝞", "mass": 2.4}
-    ]
-}
-```
-
-This packet is:
-
-* **compact** (top-k concepts)
-* **symbolic** (human-legible node names)
-* **structured** (edges with relation/tension)
-* **physics-informed** (masses, drift age, decay)
-
-It captures **what the field remembers** at that moment.
-
-### 5.3 LLM Prompting Protocol
-
-The LLM receives a structured memory packet and a task instruction.
-
-### **Minimal prompt template**
-
-```text
-You are reading a slice of holographic memory. 
-Below is a structured semantic field extracted near the user query.
-
-Nodes contain: name, mass (importance), and age (recency).
-Edges contain: relation strength and semantic tension.
-Glyphs represent stable, symbolic anchors.
-
-Using ONLY the information in this memory field, reconstruct an explanation.
-Avoid adding external facts. Missing details should be inferred from structural patterns.
-```
-
-### **LLM Input**
-
-* Query text
-* Memory Packet (JSON)
-
-### **LLM Output**
-
-* Reconstruction
-* Explanation
-* Multi-step reasoning grounded in the structure
-
-This transforms the LLM into a **reader** of memory, not the memory itself.
-
-### 5.4 Why the SMI Matters
-
-#### **1. Prevents Hallucinations**
-
-The LLM is constrained to:
-
-* the graph
-* the relations
-* the mass distribution
-* the tension between nodes
-
-It cannot invent isolated facts; it must reason from structure.
-
-#### **2. Enables Symbolic Recurrence**
-
-Glyphs act as timeless anchors.
-The LLM reactivates them even if:
-
-* wording changes
-* exact embeddings drift
-* context evolves
-
-This is how **semantic continuity** emerges without persistent text logs.
-
-#### **3. Supports Multi-Session Memory**
-
-Because the field is dynamic:
-
-* high-mass nodes become “core memory”
-* low-mass nodes decay
-* mitosis resolves ambiguity over time
-* glyphs maintain long-term identity
-
-The SMI lets the LLM interpret this evolution.
-
-#### **4. Mirrors Human Memory Use**
-
-Humans do not retrieve verbatim logs — we reconstruct from:
-
-* clusters
-* associations
-* weights
-* symbolic cues
-
-The SMI replicates this reconstruction mechanism.
-
-### 5.5 SMI as a Research Layer
-
-At this stage, the SMI is **not a rules engine or knowledge graph**.
-It is:
-
-* an interface
-* a forcing function
-* a binding layer
-
-Future directions (for v1.1+) include:
-
-* resonance-based packet selection
-* probe trajectory visualization
-* iterative multi-hop field reading
-* LLM-generated “memory edits” (e.g., causally modifying the field)
-* symbolic compression for long-term storage
-
-But the core principle remains:
-
-> **The SMI lets the LLM access memory without contaminating the field with its own internal hallucinations.**
-
-## 6. Version History
-
-| Version | Date | Changes |
-| :--- | :--- | :--- |
-| **0.1.0** | 2025-10-01 | Initial Prototype. Simple vector storage. |
-| **0.5.0** | 2025-11-15 | Added Gravity Field simulation. |
-| **0.8.0** | 2025-11-20 | Added Concept Mitosis (Heuristic). |
-| **1.0.0** | 2025-11-27 | **Research Upgrade**: LatentManifold, Geometry-Based Mitosis (FAISS), Glyph Physics, SMI. |
-| **1.1.0** | 2025-12-01 | **Performance Upgrade**: MiniLM Embeddings, SQLite Storage, Vectorized Gravity, PCA Caching. |
-| **1.2.0** | 2025-12-02 | **Quality Metrics**: MG Scorer module for semantic field health monitoring and collapse detection. |
-| **1.3.0** | 2025-12-05 | **Cost Engine & Config**: Diagnostic meta-layer (Resistance/Entropy/Drift), centralized configuration system, removed legacy `api_server/`. |
-| **1.4.0** | 2025-12-05 | **Coreference Resolution**: Hybrid pronoun resolution (FastCoref + Gravity fallback), trace metadata for resolved text, improved concept extraction. |
-| **1.5.0** | 2025-12-05 | **Normalization Pipeline**: 4-stage spelling correction and normalization (SymSpell + Manifold alignment + Canonicalization) before coreference, prevents duplicate concepts and false mitosis. |
-| **1.6.0** | 2025-12-06 | **Code Mapping Layer**: AST-based code ingestion, precise source mapping (file + span), semantic code search, fusion protection for code concepts, `/ingest/code` and `/query/code` endpoints. |
+Those files may still be useful as research context, but they should not be treated as the current design description.

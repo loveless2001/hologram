@@ -420,6 +420,21 @@ class Hologram:
                 out.append((t, score))
         return out
 
+    def search_adaptive(self, query: str, top_k: int = 5,
+                        top_glyphs: int = 2) -> List[Tuple[Trace, float]]:
+        """Adaptive retrieval: stay global unless shard population warrants routing."""
+        qv = self.manifold.align_text(query, self.text_encoder)
+        if self.router is None:
+            return self.glyphs.search_across(qv, top_k=top_k)
+
+        hits = self.router.search_adaptive(qv, top_k=top_k, top_glyphs=top_glyphs)
+        out = []
+        for trace_id, score in hits:
+            t = self.store.get_trace(trace_id)
+            if t:
+                out.append((t, score))
+        return out
+
     def search_image_path(self, path: str, top_k: int = 5):
         # Use manifold for alignment
         qv = self.manifold.align_image(path, self.image_encoder)

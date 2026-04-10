@@ -311,4 +311,4 @@ pytest tests/test_mg_*.py -v
 - Test Scenarios: `hologram/mgscore_testing.md`
 - Implementation: `hologram/mg_scorer.py`
 - Architecture: `docs/architecture_design.md`
-- Research Paper: `docs/research_paper.md`
+- Research Paper: `docs/legacy/research_paper.md`

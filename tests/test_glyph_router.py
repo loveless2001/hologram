@@ -205,3 +205,49 @@ class TestGlyphRouter:
         assert len(concept.glyph_affinity) == 2
         assert abs(concept.glyph_affinity["g1"] - 0.5) < 1e-9
         assert abs(concept.glyph_affinity["g2"] - 0.5) < 1e-9
+
+    def test_decide_routing_rejects_sparse_doc_shards(self):
+        """Doc-per-glyph layouts should stay global until shards are nontrivial."""
+        store = MemoryStore(vec_dim=DIM)
+        glyphs = GlyphRegistry(store)
+        router = GlyphRouter(store, glyphs)
+
+        for i in range(10):
+            gid = f"doc_{i}"
+            glyphs.create(gid, title=gid)
+            vec = np.random.randn(DIM).astype("float32")
+            t = Trace(trace_id=f"t_{i}", kind="text", content=f"c_{i}", vec=vec)
+            glyphs.attach_trace(gid, t)
+
+        decision = router.decide_routing()
+        assert not decision.should_route
+        assert decision.reason == "too_few_populated_glyphs"
+
+    def test_search_adaptive_matches_global_when_sparse(self):
+        store = MemoryStore(vec_dim=DIM)
+        glyphs = GlyphRegistry(store)
+        router = GlyphRouter(store, glyphs)
+
+        target_vec = _make_biased_vec(DIM, 0, 8, bias_strength=6.0)
+        for i in range(6):
+            gid = f"doc_{i}"
+            glyphs.create(gid, title=gid)
+            vec = target_vec.copy() if i == 0 else np.random.randn(DIM).astype("float32")
+            t = Trace(trace_id=f"t_{i}", kind="text", content=f"c_{i}", vec=vec)
+            glyphs.attach_trace(gid, t)
+
+        global_hits = store.search_traces(target_vec, top_k=3)
+        adaptive_hits = router.search_adaptive(target_vec, top_k=3)
+        assert adaptive_hits == global_hits
+
+    def test_search_adaptive_routes_when_glyphs_are_populated(self, multi_domain_setup):
+        store, glyphs = multi_domain_setup
+        router = GlyphRouter(store, glyphs)
+
+        decision = router.decide_routing()
+        assert decision.should_route
+
+        q = _make_biased_vec(DIM, 0, 8, bias_strength=5.0)
+        results = router.search_adaptive(q, top_k=3)
+        phys_count = sum(1 for tid, _ in results if tid.startswith("phys_"))
+        assert phys_count >= 2, f"Expected adaptive routing to use shard path, got {results}"
