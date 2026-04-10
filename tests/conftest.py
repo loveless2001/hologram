@@ -9,20 +9,24 @@ from pathlib import Path
 @pytest.fixture(autouse=True)
 def reset_global_state():
     """Reset global state before each test to ensure isolation."""
-    # Clear hologram instances
-    from hologram.server import hologram_instances
-    hologram_instances.clear()
-    
+    # Clear hologram instances (guard against missing fastapi)
+    try:
+        from hologram.server import hologram_instances
+        hologram_instances.clear()
+    except ImportError:
+        hologram_instances = None
+
     # Reset Config to defaults (reload the module)
     # This ensures each test starts with clean config
     import importlib
     from hologram import config
     importlib.reload(config)
-    
+
     yield
-    
+
     # Cleanup after test
-    hologram_instances.clear()
+    if hologram_instances is not None:
+        hologram_instances.clear()
 
 
 @pytest.fixture

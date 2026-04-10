@@ -27,9 +27,9 @@ from .gravity import GravityField  # ← integrate Memory Gravity
 from .text_utils import extract_concepts, normalize_text
 from .manifold import LatentManifold
 from .retrieval import extract_local_field
-from .retrieval import extract_local_field
 from .smi import MemoryPacket
 from .mg_scorer import MGScore, mg_score
+from .glyph_router import GlyphRouter
 
 
 @dataclass
@@ -46,6 +46,7 @@ class Hologram:
     image_encoder: Any
     manifold: LatentManifold
     field: Optional[GravityField] = None
+    router: Optional[GlyphRouter] = None  # Glyph-routed retrieval
     project: str = "default"  # NEW: Project namespace
 
     # --- Initialization ---
@@ -95,13 +96,17 @@ class Hologram:
         manifold = LatentManifold(dim=store.vec_dim)
         field = GravityField(dim=store.vec_dim) if use_gravity else None
 
+        glyphs_reg = GlyphRegistry(store)
+        router = GlyphRouter(store, glyphs_reg, gravity_field=field)
+
         instance = cls(
             store=store,
-            glyphs=GlyphRegistry(store),
+            glyphs=glyphs_reg,
             text_encoder=text_enc,
             image_encoder=img_enc,
             manifold=manifold,
             field=field,
+            router=router,
             project="default"  # Default project namespace
         )
         
@@ -248,7 +253,11 @@ class Hologram:
             
             # Trigger dynamic self-regulation (Auto-Fusion & Auto-Mitosis)
             self.field.sim.step_dynamics()
-                        
+
+        # Invalidate glyph router shards (trace membership changed)
+        if self.router is not None:
+            self.router.invalidate()
+
         return trace_id
 
     def add_image_path(self, glyph_id: str, path: str, trace_id: Optional[str] = None, **meta):
@@ -260,6 +269,8 @@ class Hologram:
         self.glyphs.attach_trace(glyph_id, tr)
         if self.field:
             self.field.add(trace_id, vec)
+        if self.router is not None:
+            self.router.invalidate()
         return trace_id
 
     def ingest_code(self, file_path: str) -> int:
@@ -307,6 +318,25 @@ class Hologram:
         # Use manifold for alignment
         qv = self.manifold.align_text(query, self.text_encoder)
         return self.glyphs.search_across(qv, top_k=top_k)
+
+    def search_routed(self, query: str, top_k: int = 5, top_glyphs: int = 2) -> List[Tuple[Trace, float]]:
+        """Glyph-routed retrieval: infer glyphs → search shards → merge.
+
+        Returns same format as search_text() for easy A/B comparison.
+        """
+        if self.router is None:
+            return self.glyphs.search_across(
+                self.manifold.align_text(query, self.text_encoder), top_k=top_k)
+
+        qv = self.manifold.align_text(query, self.text_encoder)
+        hits = self.router.search_routed(qv, top_k=top_k, top_glyphs=top_glyphs)
+        # Convert (trace_id, score) → (Trace, score) to match search_text format
+        out = []
+        for trace_id, score in hits:
+            t = self.store.get_trace(trace_id)
+            if t:
+                out.append((t, score))
+        return out
 
     def search_image_path(self, path: str, top_k: int = 5):
         # Use manifold for alignment
@@ -533,6 +563,59 @@ class Hologram:
             
         return mg_score(vectors)
 
+    # --- KG + Drift ---
+    def build_kg_batch(
+        self,
+        batch_id: str,
+        items: List[Dict[str, Any]],
+        timestamp: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Build a semantic batch knowledge graph snapshot.
+        """
+        from .kg.builder import build_batch_kg_snapshot
+
+        snapshot = build_batch_kg_snapshot(batch_id=batch_id, items=items, timestamp=timestamp)
+        return snapshot.to_dict()
+
+    def compare_drift(
+        self,
+        baseline_id: str,
+        target_id: str,
+        baseline_items: List[Dict[str, Any]],
+        target_items: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Compare two batches and return drift report.
+        """
+        from .drift.engine import compare_batches
+        from .drift.models import DriftComparisonInput
+        from .kg.builder import build_batch_kg_snapshot
+
+        comparison = DriftComparisonInput(
+            baseline_id=baseline_id,
+            target_id=target_id,
+            baseline_items=baseline_items,
+            target_items=target_items,
+        )
+
+        baseline_snapshot = build_batch_kg_snapshot(baseline_id, baseline_items)
+        target_snapshot = build_batch_kg_snapshot(target_id, target_items)
+
+        def embed_func(text: str) -> np.ndarray:
+            return self.manifold.align_text(text, self.text_encoder)
+
+        report = compare_batches(
+            comparison,
+            embed_func=embed_func,
+            baseline_snapshot=baseline_snapshot,
+            target_snapshot=target_snapshot,
+        )
+        payload = report.to_dict()
+        payload["baseline_snapshot"] = baseline_snapshot.to_dict()
+        payload["target_snapshot"] = target_snapshot.to_dict()
+        return payload
+
     # --- Utility ---
     def summarize_hit(self, trace: Trace, score: float) -> str:
         head = trace.content if trace.kind == "text" else f"{trace.kind}:{trace.content}"
@@ -599,13 +682,17 @@ class Hologram:
             
         manifold = LatentManifold(dim=store.vec_dim)
 
+        glyphs_reg = GlyphRegistry(store)
+        router = GlyphRouter(store, glyphs_reg, gravity_field=field)
+
         instance = cls(
             store=store,
-            glyphs=GlyphRegistry(store),
+            glyphs=glyphs_reg,
             text_encoder=text_enc,
             image_encoder=img_enc,
             manifold=manifold,
             field=field,
+            router=router,
             project="default"
         )
         

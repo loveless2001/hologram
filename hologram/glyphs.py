@@ -69,6 +69,17 @@ class GlyphRegistry:
             # Use is_glyph=True to overwrite vector/mass
             gravity.add_concept(name, vec=centroid, mass=mass, is_glyph=True)
 
+            # 4. Update glyph_affinity on the trace's concept in gravity field
+            # Trace-level authority: equal weight per attached glyph
+            trace_concept = gravity.concepts.get(trace.trace_id)
+            if trace_concept is not None:
+                # Register membership, then recompute equal weights from full set
+                trace_concept.glyph_affinity[glyph_id] = 1.0
+                n_glyphs = len(trace_concept.glyph_affinity)
+                equal_weight = 1.0 / n_glyphs
+                for gid in trace_concept.glyph_affinity:
+                    trace_concept.glyph_affinity[gid] = equal_weight
+
     def recall(self, glyph_id: str, top_k: int = 5) -> List[Trace]:
         """Recall traces for a given glyph."""
         g = self.store.get_glyph(glyph_id)

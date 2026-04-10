@@ -3,6 +3,7 @@ import numpy as np
 import hashlib
 import threading
 import faiss
+import ctypes
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Any, Set
 import os
@@ -12,9 +13,37 @@ try:
 except ImportError:
     psutil = None
 
+# Logging control via environment:
+# - HOLOGRAM_LOG_LEVEL=none|error|info|debug (default: info)
+# - HOLOGRAM_QUIET=1 forces "none"
+_LOG_LEVELS = {"none": 0, "error": 1, "info": 2, "debug": 3}
+_EVENT_MIN_LEVEL = {
+    "ERROR": 1,
+    "FUSION": 2,
+    "MITOSIS": 2,
+    "GRAVITY": 2,
+    "COREF-FALLBACK": 3,
+}
+
+
+def _current_log_level() -> int:
+    if os.getenv("HOLOGRAM_QUIET", "0") == "1":
+        return 0
+    level = os.getenv("HOLOGRAM_LOG_LEVEL", "info").strip().lower()
+    return _LOG_LEVELS.get(level, 2)
+
+
+def _should_log(event_type: str) -> bool:
+    req = _EVENT_MIN_LEVEL.get(event_type, 2)
+    return _current_log_level() >= req
+
+
 # --- Streaming Log ---
 def log_event(event_type: str, message: str, details: Dict = None):
     """Emit a streaming log event."""
+    if not _should_log(event_type):
+        return
+
     # ANSI colors
     CYAN = "\033[96m"
     GREEN = "\033[92m"
@@ -103,11 +132,20 @@ def calibrate_quantization(n_concepts: int = 0) -> float:
     # Base level (conservative)
     q_level = 0.05
 
-    # 1. GPU Check (FAISS)
+    # 1. GPU Check (safe CUDA probe)
+    # Avoid faiss.get_num_gpus() here: some FAISS builds can abort process
+    # in restricted/containerized environments during CUDA probing.
     try:
-        num_gpus = faiss.get_num_gpus()
-        if num_gpus > 0:
-            q_level -= 0.02  # Significant boost for GPU
+        use_gpu = os.getenv("HOLOGRAM_USE_GPU", "1") == "1"
+        cuda_ok = False
+        if use_gpu:
+            libcuda = ctypes.CDLL("libcuda.so.1")
+            cu_init = libcuda.cuInit
+            cu_init.argtypes = [ctypes.c_uint]
+            cu_init.restype = ctypes.c_int
+            cuda_ok = (cu_init(0) == 0)
+        if cuda_ok:
+            q_level -= 0.02  # Significant boost for GPU-capable hosts
     except Exception:
         pass
 
@@ -176,6 +214,10 @@ class Concept:
     age: int = 0
     original_vec: Optional[np.ndarray] = None
     vector_history: List[np.ndarray] = field(default_factory=list) # Store last 3 vectors
+
+    # Glyph-conditioned retrieval: derived aggregate from trace-level glyph membership
+    # Keys are glyph IDs, values are normalized affinity weights (sum to 1.0)
+    glyph_affinity: Dict[str, float] = field(default_factory=dict)
 
 def is_protected_namespace(name: str) -> bool:
     """Check if concept name belongs to protected namespace."""
@@ -737,8 +779,9 @@ class Gravity:
             
             variant = self.concepts[variant_name]
             canonical = self.concepts[canonical_name]
-            
-            print(f"[Fusion] Merging '{variant_name}' → '{canonical_name}' (mass: {variant.mass:.2f} + {canonical.mass:.2f})")
+
+            if _should_log("FUSION"):
+                print(f"[Fusion] Merging '{variant_name}' → '{canonical_name}' (mass: {variant.mass:.2f} + {canonical.mass:.2f})")
             
             # Transfer mass
             if transfer_mass:
@@ -1036,6 +1079,7 @@ class Gravity:
                     "origin": c.origin,
                     "last_mitosis_step": c.last_mitosis_step,
                     "last_fusion_step": c.last_fusion_step,
+                    "glyph_affinity": c.glyph_affinity,
                 }
                 for name, c in self.concepts.items()
             },
@@ -1095,6 +1139,7 @@ class Gravity:
                     origin=origin,
                     last_mitosis_step=last_mitosis_step,
                     last_fusion_step=last_fusion_step,
+                    glyph_affinity=data.get("glyph_affinity", {}),
                 )
 
             # Restore relations

@@ -81,6 +81,21 @@ class QueryCodeRequest(BaseModel):
     top_k: int = 5
 
 
+class KGBuildRequest(BaseModel):
+    project: str
+    batch_id: str
+    items: List[Dict[str, Any]]
+    timestamp: Optional[str] = None
+
+
+class DriftCompareRequest(BaseModel):
+    project: str
+    baseline_id: str
+    target_id: str
+    baseline_items: List[Dict[str, Any]]
+    target_items: List[Dict[str, Any]]
+
+
 class MemorySummary(BaseModel):
     project: str
     total_concepts: int
@@ -262,6 +277,31 @@ async def ingest_code(req: IngestCodeRequest):
          raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/query/routed")
+async def query_routed(req: QueryRequest):
+    """
+    Glyph-routed retrieval — queries route through glyph-conditioned subspaces.
+    Parallel to /query for A/B comparison. Same request/response schema.
+    """
+    if req.project not in hologram_instances:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{req.project}' not found. Ingest some data first."
+        )
+    try:
+        holo = hologram_instances[req.project]
+        results = holo.search_routed(req.text, top_k=req.top_k)
+        return {
+            "query": req.text,
+            "results": [
+                {"trace_id": t.trace_id, "content": t.content, "score": round(s, 4)}
+                for t, s in results
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/query/code")
 async def query_code(req: QueryCodeRequest):
     """
@@ -275,6 +315,41 @@ async def query_code(req: QueryCodeRequest):
         return {"results": results}
     except Exception as e:
          raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/kg/build_batch")
+async def build_kg_batch(req: KGBuildRequest):
+    """
+    Build a semantic knowledge graph snapshot for a batch.
+    """
+    try:
+        holo = get_or_create_hologram(req.project)
+        snapshot = holo.build_kg_batch(
+            batch_id=req.batch_id,
+            items=req.items,
+            timestamp=req.timestamp,
+        )
+        return {"status": "success", "project": req.project, "snapshot": snapshot}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/drift/compare")
+async def compare_drift(req: DriftCompareRequest):
+    """
+    Compare baseline and target batches with embedding and KG drift signals.
+    """
+    try:
+        holo = get_or_create_hologram(req.project)
+        report = holo.compare_drift(
+            baseline_id=req.baseline_id,
+            target_id=req.target_id,
+            baseline_items=req.baseline_items,
+            target_items=req.target_items,
+        )
+        return {"status": "success", "project": req.project, "report": report}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/memory/{project}")
