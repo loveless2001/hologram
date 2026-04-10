@@ -102,6 +102,37 @@ results = benchmark.run_full_suite(test_data)
 
 ---
 
+## Glyph-Routed Retrieval Benchmarks
+
+Glyph-routed retrieval (`search_routed()`) can be benchmarked against global search (`search_text()`) using the included benchmark scripts:
+
+```bash
+# Synthetic vector benchmark (fast, tests routing mechanism)
+python tests/benchmark-glyph-routing-vs-global.py
+
+# MiniLM real-text benchmark (tests with semantic embeddings)
+python tests/benchmark-glyph-routing-minilm-real-text.py
+```
+
+### Key Metrics for Routed Retrieval
+| Metric | Description | Target |
+|--------|-------------|--------|
+| Recall@5 | Fraction of relevant results in top-5 | >= global baseline |
+| Interference Rate | Fraction of cross-domain results in top-5 | < global baseline |
+| Routing Accuracy | Correct glyph inferred from query | > 80% |
+| Fallback Rate | How often global fallback is needed | < 20% |
+
+### Discriminant Basis Results (MiniLM, 3 domains x 15 traces)
+| Method | Recall@5 | Interference |
+|--------|----------|--------------|
+| Global baseline | 0.867 | 0.133 |
+| Routed (identity) | 0.867 | 0.133 |
+| Discriminant (k=48) | **0.987** | **0.013** |
+
+**Latency note**: Routed search uses lazy shard construction. First query includes cold-path overhead (operator build, trace transforms, FAISS index). Steady-state query latency is lower.
+
+---
+
 ## Comparing Against Baselines
 
 To compare with traditional approaches:

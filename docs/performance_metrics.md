@@ -49,6 +49,29 @@ Accuracy = (# correct multi-hop paths found) / (# ground truth paths)
 ```
 Measures: Can the system chain concepts together (A→B→C)?
 
+### 1.3 Glyph-Routed Retrieval Metrics
+
+**Interference Rate**
+```
+Interference@K = (# cross-domain results in top K) / K
+```
+Measures: How many results come from the wrong glyph domain? Lower is better.
+
+**Routing Accuracy**
+```
+Routing_Accuracy = (# queries where correct glyph is in top-N inferred) / (# total queries)
+```
+Measures: Does `infer_glyphs()` select the right glyph subspace?
+
+**Routed vs Global Delta**
+```
+Δ_Recall = Recall@K(routed) - Recall@K(global)
+Δ_Interference = Interference@K(global) - Interference@K(routed)
+```
+Measures: Net quality gain from glyph routing. Positive Δ_Recall and positive Δ_Interference indicate improvement.
+
+**Benchmark scripts**: `tests/benchmark-glyph-routing-vs-global.py`, `tests/benchmark-glyph-routing-minilm-real-text.py`
+
 ---
 
 ## 2. Gravity Field Quality Metrics
