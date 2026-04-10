@@ -132,10 +132,10 @@ def setup_kb(encoder):
 
 
 def run_method(method_name, store, glyphs, encoder, ground_truth,
-               use_projection=False, projection_k=None):
+               use_projection=False, projection_k=None, learn_basis=False):
     """Run benchmark for one method."""
     router = GlyphRouter(store, glyphs, use_projection=use_projection,
-                         projection_k=projection_k)
+                         projection_k=projection_k, learn_basis=learn_basis)
 
     total_recall = 0
     total_interference = 0
@@ -181,18 +181,22 @@ def main():
     print("Encoding domain texts and building KB...")
     store, glyphs, ground_truth = setup_kb(encoder)
 
+    # (label, method, use_projection, k, learn_basis)
     configs = [
-        ("Global (baseline)", "global", False, None),
-        ("Routed (identity)", "routed", False, None),
-        ("Routed (R_g+P_k k=48)", "routed", True, 48),
-        ("Routed (R_g+P_k k=96)", "routed", True, 96),
-        ("Routed (R_g+P_k k=192)", "routed", True, 192),
+        ("Global (baseline)", "global", False, None, False),
+        ("Routed (identity)", "routed", False, None, False),
+        ("Routed (random k=48)", "routed", True, 48, False),
+        ("Discrim (k=16)", "routed", True, 16, True),
+        ("Discrim (k=48)", "routed", True, 48, True),
+        ("Discrim (k=96)", "routed", True, 96, True),
+        ("Discrim (k=192)", "routed", True, 192, True),
     ]
 
     results = {}
-    for label, method, use_proj, k in configs:
+    for label, method, use_proj, k, learn in configs:
         r = run_method(method, store, glyphs, encoder, ground_truth,
-                       use_projection=use_proj, projection_k=k)
+                       use_projection=use_proj, projection_k=k,
+                       learn_basis=learn)
         results[label] = r
 
     # Print results
@@ -217,29 +221,24 @@ def main():
 
     print()
     # Verdict
-    identity = results["Routed (identity)"]
-    best_proj = min(
-        [(l, r) for l, r in results.items() if "R_g" in l],
-        key=lambda x: x[1]["avg_interference_rate"]
-    )
+    proj_configs = [(l, r) for l, r in results.items()
+                    if l != "Global (baseline)" and l != "Routed (identity)"]
+    if proj_configs:
+        best_proj = min(proj_configs,
+                        key=lambda x: x[1]["avg_interference_rate"])
+        print(f"Best projection: {best_proj[0]}")
+        print(f"  vs Global: recall {best_proj[1]['avg_recall_at_5']:.4f} vs "
+              f"{baseline['avg_recall_at_5']:.4f}, "
+              f"interference {best_proj[1]['avg_interference_rate']:.4f} vs "
+              f"{baseline['avg_interference_rate']:.4f}")
 
-    print(f"Best projection config: {best_proj[0]}")
-    print(f"  vs Global: recall {best_proj[1]['avg_recall_at_5']:.4f} vs "
-          f"{baseline['avg_recall_at_5']:.4f}, "
-          f"interference {best_proj[1]['avg_interference_rate']:.4f} vs "
-          f"{baseline['avg_interference_rate']:.4f}")
-
-    if (best_proj[1]["avg_interference_rate"] < baseline["avg_interference_rate"]
-            and best_proj[1]["avg_recall_at_5"] >= baseline["avg_recall_at_5"] - 0.05):
-        print("\nVERDICT: PASS — R_g+P_k reduces interference on real embeddings.")
-        print("Random rotations have value. Learned R_g is an optimization, not a requirement.")
-    elif (identity["avg_interference_rate"] < baseline["avg_interference_rate"]
-          and identity["avg_recall_at_5"] >= baseline["avg_recall_at_5"] - 0.05):
-        print("\nVERDICT: ROUTING HELPS, PROJECTION NEUTRAL — Glyph routing alone "
-              "reduces interference. R_g+P_k doesn't add value beyond routing.")
-    else:
-        print("\nVERDICT: INCONCLUSIVE — Neither routing nor projection clearly "
-              "reduces interference. Consider learned R_g or different k values.")
+        if (best_proj[1]["avg_interference_rate"] < baseline["avg_interference_rate"]
+                and best_proj[1]["avg_recall_at_5"] >= baseline["avg_recall_at_5"] - 0.05):
+            print(f"\nVERDICT: PASS — {best_proj[0]} reduces interference on "
+                  "real embeddings without recall regression.")
+        else:
+            print("\nVERDICT: INCONCLUSIVE — projection didn't clearly reduce "
+                  "interference. May need more data or contrastive learning.")
 
 
 if __name__ == "__main__":

@@ -72,12 +72,13 @@ class GlyphRouter:
 
     def __init__(self, store: MemoryStore, glyphs: GlyphRegistry,
                  gravity_field=None, use_projection: bool = True,
-                 projection_k: int = None):
+                 projection_k: int = None, learn_basis: bool = False):
         self._store = store
         self._glyphs = glyphs
         self._gravity = gravity_field
         self._use_projection = use_projection
         self._projection_k = projection_k
+        self._learn_basis = learn_basis  # Use PCA-learned R_g from trace data
         self._operators: Dict[str, GlyphOperator] = {}
         self._shards: Dict[str, GlyphShardIndex] = {}
         self._dirty: bool = True
@@ -127,22 +128,96 @@ class GlyphRouter:
         self._operators.clear()
         self._shards.clear()
 
+        # Compute discriminant basis if learning is enabled
+        discriminant_basis = None
+        if self._learn_basis and self._use_projection and len(all_glyphs) >= 2:
+            discriminant_basis = self._compute_discriminant_basis(
+                all_glyphs, dim)
+
         for g in all_glyphs:
-            # Create glyph-specific operator with rotation + projection
             op = GlyphOperator(g.glyph_id, dim, k=self._projection_k,
                                use_projection=self._use_projection)
+
+            # Inject shared discriminant basis if available
+            if discriminant_basis is not None:
+                op.set_basis(discriminant_basis)
+
             self._operators[g.glyph_id] = op
 
-            # Collect traces for this glyph
+            # Collect traces and build shard index
             traces = [self._store.get_trace(tid) for tid in g.trace_ids]
             traces = [t for t in traces if t is not None]
-
-            # Build shard index
             shard = GlyphShardIndex(g.glyph_id, op)
             shard.build(traces)
             self._shards[g.glyph_id] = shard
 
         self._dirty = False
+
+    def _compute_discriminant_basis(self, all_glyphs, dim: int):
+        """Compute a shared discriminant basis from glyph centroids.
+
+        Finds directions that maximally separate glyph centroids via
+        eigendecomposition of the between-class scatter matrix.
+        Works with any number of glyphs/traces (no n >> d requirement).
+
+        Returns (k, dim) basis matrix, or None if insufficient data.
+        """
+        # Compute centroid per glyph
+        centroids = []
+        for g in all_glyphs:
+            vecs = []
+            for tid in g.trace_ids:
+                t = self._store.get_trace(tid)
+                if t is not None and t.vec is not None:
+                    vecs.append(t.vec)
+            if vecs:
+                centroid = np.mean(vecs, axis=0).astype("float32")
+                centroids.append(centroid)
+
+        if len(centroids) < 2:
+            return None
+
+        # Between-class scatter: S_b = Σ (c_i - c_global)(c_i - c_global)^T
+        centroids_mat = np.stack(centroids)  # (n_glyphs, dim)
+        global_mean = centroids_mat.mean(axis=0, keepdims=True)
+        centered = centroids_mat - global_mean  # (n_glyphs, dim)
+
+        # SVD of centered centroids gives discriminant directions
+        # U @ diag(S) @ Vt = centered; rows of Vt are scatter eigenvectors
+        _, S, Vt = np.linalg.svd(centered, full_matrices=False)
+
+        # Take top-k components (at most n_glyphs - 1 meaningful directions)
+        k = self._projection_k or max(dim // 8, 8)
+        n_meaningful = min(len(centroids) - 1, len(S))
+
+        if n_meaningful < 1:
+            return None
+
+        # Use meaningful discriminant directions + fill remaining k slots
+        # with random orthogonal directions from null space
+        basis_rows = min(k, Vt.shape[0])
+        basis = Vt[:basis_rows].astype("float32")
+
+        # If k > n_meaningful, pad with random orthogonal vectors
+        if basis_rows < k:
+            # QR on random matrix in the orthogonal complement
+            import hashlib as _hlib
+            combined = "|".join(sorted(g.glyph_id for g in all_glyphs))
+            digest = _hlib.blake2b(combined.encode("utf-8"), digest_size=4).digest()
+            seed = int.from_bytes(digest, "little") % (2**31)
+            rng = np.random.RandomState(seed)
+            pad_needed = k - basis_rows
+            # Generate random vectors and orthogonalize against existing basis
+            candidates = rng.randn(pad_needed + dim, dim).astype("float32")
+            # Simple Gram-Schmidt against existing basis
+            for row in basis:
+                candidates -= np.outer(candidates @ row, row)
+            # Normalize and take top pad_needed
+            norms = np.linalg.norm(candidates, axis=1, keepdims=True) + 1e-8
+            candidates /= norms
+            basis = np.vstack([basis, candidates[:pad_needed]])
+
+        return basis[:k].astype("float32")
 
     def search_routed(self, query_vec: np.ndarray, top_k: int = 5,
                       top_glyphs: int = 2, fallback_global: bool = True,
