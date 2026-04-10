@@ -81,6 +81,17 @@ class QueryCodeRequest(BaseModel):
     top_k: int = 5
 
 
+class IngestDocumentRequest(BaseModel):
+    project: str
+    text: str
+    glyph_id: Optional[str] = None
+    sentences_per_chunk: int = 3
+    overlap: int = 1
+    tier: int = TIER_DOMAIN
+    origin: str = "kb"
+    normalize: bool = True
+
+
 class KGBuildRequest(BaseModel):
     project: str
     batch_id: str
@@ -275,6 +286,42 @@ async def ingest_code(req: IngestCodeRequest):
          import traceback
          traceback.print_exc()
          raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ingest/document")
+async def ingest_document(req: IngestDocumentRequest):
+    """
+    Chunk text, batch embed, and store as traces in one pass.
+    Content-idempotent: re-ingesting the same text is a no-op.
+    """
+    try:
+        holo = get_or_create_hologram(req.project)
+        glyph_id = req.glyph_id or f"doc:{abs(hash(req.text)) % 10**10}"
+
+        # Ensure glyph exists
+        if holo.store.get_glyph(glyph_id) is None:
+            holo.glyphs.create(glyph_id, title=glyph_id)
+
+        results = holo.ingest_document(
+            glyph_id=glyph_id,
+            text=req.text,
+            sentences_per_chunk=req.sentences_per_chunk,
+            overlap=req.overlap,
+            tier=req.tier,
+            origin=req.origin,
+            normalize=req.normalize,
+        )
+        return {
+            "status": "success",
+            "project": req.project,
+            "glyph_id": glyph_id,
+            "chunks_ingested": len(results),
+            "chunks": results,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/query/routed")
