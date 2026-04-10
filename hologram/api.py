@@ -1,9 +1,15 @@
 # hologram/api.py
 from __future__ import annotations
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Optional, List, Tuple
-# from .smi import SymbolicMemoryInterface
 import numpy as np
+
+
+def _stable_id(prefix: str, text: str) -> str:
+    """Generate a process-stable ID from text using blake2b digest."""
+    digest = hashlib.blake2b(text.encode("utf-8"), digest_size=8).hexdigest()
+    return f"{prefix}:{digest}"
 
 try:
     import torch
@@ -112,7 +118,7 @@ class Hologram:
 
         for concept_text in extract_concepts(get_system_concepts()):
             vec = instance.manifold.align_text(concept_text, text_enc)
-            cid = f"system:{abs(hash(concept_text))%10**10}"
+            cid = _stable_id("system", concept_text)
             instance.field.add(cid, vec, tier=2, project="hologram",
                                origin="system_design")
 
@@ -195,7 +201,7 @@ class Hologram:
                         if antecedent:
                             coref_map[word] = antecedent
 
-        trace_id = trace_id or f"text:{abs(hash(text))%10**10}"
+        trace_id = trace_id or _stable_id("text", text)
         # Use manifold for alignment
         vec = self.manifold.align_text(text, self.text_encoder)
         
@@ -232,7 +238,7 @@ class Hologram:
                     
                     # Concepts also go through manifold
                     c_vec = self.manifold.align_text(concept_text_normalized, self.text_encoder)
-                    c_id = f"concept:{abs(hash(concept_text_normalized))%10**10}"
+                    c_id = _stable_id("concept", concept_text_normalized)
                     self.field.add(
                         c_id, 
                         vec=c_vec,
@@ -255,7 +261,7 @@ class Hologram:
         return trace_id
 
     def add_image_path(self, glyph_id: str, path: str, trace_id: Optional[str] = None, **meta):
-        trace_id = trace_id or f"image:{abs(hash(path))%10**10}"
+        trace_id = trace_id or _stable_id("image", path)
         # Use manifold for alignment
         vec = self.manifold.align_image(path, self.image_encoder)
         

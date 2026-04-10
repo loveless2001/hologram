@@ -199,7 +199,8 @@ async def ingest_text(req: IngestRequest):
             if any(req.path.lower().endswith(ext) for ext in code_extensions):
                 is_code = True
         else:
-            glyph_id = f"text:{abs(hash(req.text)) % 10**10}"
+            import hashlib as _hlib
+            glyph_id = f"text:{_hlib.blake2b(req.text.encode('utf-8'), digest_size=8).hexdigest()}"
         
         # Add metadata for optimization
         if is_code:
