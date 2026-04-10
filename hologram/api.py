@@ -12,6 +12,7 @@ except ImportError:  # pragma: no cover
 
 from .store import MemoryStore, Trace
 from .glyphs import GlyphRegistry
+from .chunking import chunk_text, Chunk
 from .config import VECTOR_DIM
 from .embeddings import (
     ImageCLIP,
@@ -265,6 +266,59 @@ class Hologram:
         if self.router is not None:
             self.router.invalidate()
         return trace_id
+
+    def ingest_document(self, glyph_id: str, text: str,
+                        sentences_per_chunk: int = 3, overlap: int = 1,
+                        tier: int = 1, origin: str = "kb",
+                        ) -> List[dict]:
+        """Chunk text, batch embed, and store as traces in one pass.
+
+        Higher-level alternative to add_text() for bulk document ingestion.
+        Returns list of dicts with trace_id and chunk metadata.
+        """
+        chunks = chunk_text(text, sentences_per_chunk=sentences_per_chunk,
+                            overlap=overlap)
+        if not chunks:
+            return []
+
+        # Batch embed all chunk texts
+        chunk_texts = [c.text for c in chunks]
+        has_batch = hasattr(self.text_encoder, "encode_batch")
+        if has_batch:
+            vecs = self.text_encoder.encode_batch(chunk_texts)
+        else:
+            vecs = np.stack([
+                self.manifold.align_text(t, self.text_encoder) for t in chunk_texts
+            ])
+
+        results = []
+        for chunk, vec in zip(chunks, vecs):
+            vec = vec / (np.linalg.norm(vec) + 1e-8)  # normalize
+            tid = f"chunk:{chunk.source_hash}:{chunk.index}"
+            tr = Trace(
+                trace_id=tid, kind="chunk", content=chunk.text, vec=vec,
+                meta={
+                    "chunk_index": chunk.index,
+                    "char_start": chunk.char_start,
+                    "char_end": chunk.char_end,
+                    "sentence_start": chunk.sentence_start,
+                    "sentence_end": chunk.sentence_end,
+                    "source_hash": chunk.source_hash,
+                },
+            )
+            self.glyphs.attach_trace(glyph_id, tr)
+            if self.field:
+                self.field.add(tid, vec, tier=tier, project=self.project,
+                               origin=origin)
+            results.append({"trace_id": tid, "chunk_index": chunk.index,
+                            "char_start": chunk.char_start,
+                            "char_end": chunk.char_end})
+
+        # Invalidate router once after all chunks added
+        if self.router is not None:
+            self.router.invalidate()
+
+        return results
 
     def ingest_code(self, file_path: str) -> int:
         """

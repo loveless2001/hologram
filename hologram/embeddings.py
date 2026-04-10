@@ -155,6 +155,8 @@ class TextCLIP:
 
 
 class TextMiniLM:
+    _model_cache = {}
+
     def __init__(self, model_name: str = None):
         from .config import Config
         model_name = model_name or Config.embedding.MINILM_MODEL
@@ -163,11 +165,21 @@ class TextMiniLM:
                 "sentence-transformers is required for MiniLM encoding. "
                 "Install it with `pip install sentence-transformers`."
             )
-        self.model = SentenceTransformer(model_name)
+        cached = self._model_cache.get(model_name)
+        if cached is None:
+            cached = SentenceTransformer(model_name)
+            self._model_cache[model_name] = cached
+        self.model = cached
 
     def encode(self, text: str) -> np.ndarray:
         vec = self.model.encode(text, normalize_embeddings=True)
         return vec.astype("float32")
+
+    def encode_batch(self, texts: List[str]) -> np.ndarray:
+        """Batch-encode a list of strings. Returns (N, dim) float32 array."""
+        vecs = self.model.encode(texts, normalize_embeddings=True,
+                                 batch_size=min(64, len(texts)))
+        return vecs.astype("float32")
 
 
 # Utility: get embedding dim from a CLIP model (works across variants)
