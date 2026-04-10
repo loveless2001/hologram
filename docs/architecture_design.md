@@ -88,17 +88,22 @@ Stage 4: "the gravity field collapses when drift accumulates." (Canonicalization
     - Uses **FAISS K-means** for geometry-based mitosis detection.
     - **New in v1.1**: Vectorized `_mutual_drift` (matrix operations) and PCA caching for <5ms visualization.
 
-### Layer 3: The Graph (Symbolic)
-**Goal**: Provide stable, human-readable anchors for the fluid physics layer.
+### Layer 3: The Graph (Symbolic) + Glyph-Conditioned Retrieval
+**Goal**: Provide stable, human-readable anchors for the fluid physics layer, and route retrieval through glyph-conditioned subspaces.
 
 - **Responsibility**:
     - Manages **Glyphs**: Permanent symbolic identifiers (e.g., "User", "Project X", "🝞").
-    - Glyphs are not static labels; they are **massive objects** in the Gravity Field.
+    - Glyphs are not static labels; they are **operators on retrieval geometry**.
     - **Glyph Physics**:
         - **Vector**: Centroid of all traces attached to the glyph.
         - **Mass**: Logarithmic growth based on trace count ($M = 1 + 0.75 \ln(1 + N)$).
-        - This ensures that important glyphs exert strong gravity, organizing related concepts around them.
-- **Key Component**: `GlyphRegistry` (`hologram/glyphs.py`)
+    - **Glyph-Conditioned Retrieval** (new):
+        - **GlyphOperator**: Each glyph defines a transform $T_g(z) = P_k R_g z$ that projects vectors into a glyph-specific subspace.
+        - **GlyphRouter**: Infers which glyphs are relevant to a query, searches per-glyph FAISS shard indexes, and merges results.
+        - **Discriminant Basis**: Centroid-based discriminant projection finds directions that maximally separate glyphs. Shared across all operators.
+        - **Benchmark result**: +14% recall, 90% interference reduction vs global cosine on MiniLM real-text embeddings.
+        - Supports identity mode (no transform), random orthogonal R_g, and learned discriminant basis.
+- **Key Components**: `GlyphRegistry` (`hologram/glyphs.py`), `GlyphOperator` (`hologram/glyph_operator.py`), `GlyphRouter` (`hologram/glyph_router.py`)
 
 ### Layer 4: Storage (Persistence)
 **Goal**: Efficiently store and retrieve the state of the holographic field.
@@ -181,15 +186,35 @@ Stage 4: "the gravity field collapses when drift accumulates." (Canonicalization
     2.  **Recomputes Centroid**: Glyph vector = mean(trace vectors).
     3.  **Updates Gravity**: Pushes `glyph:{id}` to `GravityField` with updated mass/vector.
 
+### `hologram/glyph_operator.py`
+**Rationale**: The doc spec requires glyphs to define retrieval geometry, not just label traces.
+**Design**:
+- `GlyphOperator`: Per-glyph transform `T_g(z) = basis @ z` projecting into k-dim subspace.
+- Three modes: identity (pass-through), random orthogonal, learned discriminant basis.
+- `learn_from_traces()`: PCA-based learning (for future use with large datasets).
+- `set_basis()`: Accept externally-computed basis (e.g., shared discriminant).
+- Process-stable determinism via `blake2b` seed derivation.
+
+### `hologram/glyph_router.py`
+**Rationale**: Centralize glyph-routed retrieval in one module instead of scattering across store/gravity/api.
+**Design**:
+- `GlyphShardIndex`: Per-glyph FAISS index storing operator-transformed vectors.
+- `GlyphRouter`: Infers glyph distribution via `resonance_score`, searches shard indexes, merges results.
+- `_compute_discriminant_basis()`: SVD on between-glyph centroid scatter matrix for shared discriminant projection.
+- Supports `learn_basis=True` for discriminant mode, `use_projection=True/False` for transform/identity.
+
 ### `hologram/api.py`
 **Rationale**: A unified facade for the complex subsystems.
 **Design**:
-- `Hologram` class initializes Manifold, Gravity, and GlyphRegistry.
+- `Hologram` class initializes Manifold, Gravity, GlyphRegistry, and GlyphRouter.
+- Shared helpers: `_resolve_encoders()`, `_build_instance()`, `_auto_ingest_system()`.
 - `add_text`:
     1.  Encode via Manifold.
     2.  Create Trace -> Attach to Glyph.
     3.  Extract sub-concepts -> Add to Gravity.
     4.  Trigger Mitosis checks.
+    5.  Invalidate GlyphRouter shards.
+- `search_routed()`: Glyph-routed retrieval (parallel to `search_text()`).
 
 ### `hologram/mg_scorer.py`
 **Rationale**: Need quantitative metrics to assess memory field health and detect semantic collapse.

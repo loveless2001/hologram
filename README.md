@@ -6,6 +6,23 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 
 ## ✨ Latest Features (Dec 2024)
 
+### 🔬 Glyph-Conditioned Spectral Memory (Apr 2026)
+- **Glyph-Routed Retrieval**: Queries route through glyph-conditioned subspaces instead of one global index
+- **GlyphOperator**: Per-glyph transform `T_g(z) = P_k R_g z` with orthogonal rotation + dimension projection
+- **GlyphRouter**: Infers glyph distribution from query, searches per-glyph FAISS shard indexes, merges results
+- **Discriminant Basis**: Centroid-based discriminant projection finds directions that maximally separate glyphs
+- **Benchmark Result**: +14% recall, 90% interference reduction vs global cosine on MiniLM real-text embeddings
+- **API**: `search_routed()` Python method + `POST /query/routed` REST endpoint
+- Modules: `hologram/glyph_operator.py`, `hologram/glyph_router.py`
+
+### 🧭 KG + Drift Pivot Notes (Mar 2026)
+- Added initial `hologram/kg/` module for batch semantic graph snapshots.
+- Added initial `hologram/drift/` module for flexible batch-vs-batch drift scoring.
+- Added API endpoints:
+  - `POST /kg/build_batch`
+  - `POST /drift/compare`
+- Resume reference: `docs/kg_drift_resume.md`
+
 ### 💻 Code Mapping Layer (New!)
 - **AST-Based Parsing**: Extracts classes, functions, and symbols from Python source files
 - **Precise Source Mapping**: Maps each concept to exact file path and line span
@@ -122,6 +139,8 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
 - `global_config.py` – **global config persistence & sync**
 - `cost_engine.py` – **diagnostic metrics**
 - `manifold.py` – vector space alignment
+- `glyph_operator.py` – **glyph-conditioned transform operators** (rotation + projection)
+- `glyph_router.py` – **glyph-routed retrieval** (shard routing, discriminant basis, score fusion)
 - `retrieval.py` – probe-based dynamic retrieval
 - `smi.py` – Symbolic Memory Interface
 - `mg_scorer.py` – semantic quality metrics
@@ -130,6 +149,8 @@ A holographic memory sandbox that anchors multi-modal traces to glyphs, stores t
   - `extractor.py` – Symbol extraction and normalization
   - `mapper.py` – Concept-to-Glyph mapping with source metadata
 - `storage/` – SQLite backend for scalable persistence
+- `kg/` – batch knowledge graph snapshot builder (pivot scaffolding)
+- `drift/` – drift detectors and report engine (pivot scaffolding)
 
 ### Command-Line Tools
 - `chat_cli.py` – command-line chat demo with cross-session context
@@ -282,7 +303,28 @@ python scripts/setup_hologram.py --init  # Updates global DB
 ```
 
 
-### 6. Code Ingestion
+### 6. Glyph-Routed Retrieval
+
+```python
+from hologram import Hologram
+
+holo = Hologram.init(encoder_mode="minilm", use_gravity=True)
+
+# Create domain-specific glyphs
+holo.glyphs.create("physics", title="Physics")
+holo.glyphs.create("biology", title="Biology")
+
+# Add traces to glyphs
+holo.add_text("physics", "General relativity describes gravity as spacetime curvature")
+holo.add_text("biology", "DNA replication copies genetic material in cells")
+
+# Glyph-routed search (routes through glyph subspaces)
+results = holo.search_routed("How does gravity work?", top_k=3)
+for trace, score in results:
+    print(f"{score:.3f}: {trace.content}")
+```
+
+### 7. Code Ingestion
 
 ```python
 from hologram import Hologram
@@ -344,6 +386,24 @@ Visit `http://localhost:8000/viz/viz.html` after loading a KB to see the 2D conc
     "edges": [{"a": "engine", "b": "magnetic", "relation": 0.82}],
     "glyphs": [{"id": "file:engine.py", "mass": 5.1}],
     "trajectory_steps": [[0.1, 0.2, ...], ...]
+  }
+  ```
+
+- `POST /query/routed` – glyph-routed retrieval (queries route through glyph subspaces)
+  ```json
+  {
+    "project": "my_project",
+    "text": "How does gravity bend spacetime?",
+    "top_k": 5
+  }
+  ```
+  Returns:
+  ```json
+  {
+    "query": "How does gravity bend spacetime?",
+    "results": [
+      {"trace_id": "physics_0", "content": "Einstein's theory...", "score": 0.89}
+    ]
   }
   ```
 
