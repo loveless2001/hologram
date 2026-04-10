@@ -309,10 +309,20 @@ class Hologram:
                 self.manifold.align_text(t, self.text_encoder) for t in chunk_texts
             ])
 
+        # Content-idempotent: skip chunks that already exist in the store.
+        # Same document → same source_hash → same chunk IDs → no-op.
+        # Changed document → new source_hash → new IDs → ingests as new.
         results = []
+        any_new = False
         for chunk, ct, vec in zip(chunks, chunk_texts, vecs):
-            vec = vec / (np.linalg.norm(vec) + 1e-8)  # normalize
             tid = f"chunk:{chunk.source_hash}:{chunk.index}"
+            if self.store.get_trace(tid) is not None:
+                results.append({"trace_id": tid, "chunk_index": chunk.index,
+                                "char_start": chunk.char_start,
+                                "char_end": chunk.char_end})
+                continue
+
+            vec = vec / (np.linalg.norm(vec) + 1e-8)
             tr = Trace(
                 trace_id=tid, kind="chunk", content=ct, vec=vec,
                 meta={
@@ -328,12 +338,13 @@ class Hologram:
             if self.field:
                 self.field.add(tid, vec, tier=tier, project=self.project,
                                origin=origin)
+            any_new = True
             results.append({"trace_id": tid, "chunk_index": chunk.index,
                             "char_start": chunk.char_start,
                             "char_end": chunk.char_end})
 
-        # Invalidate router once after all chunks added
-        if self.router is not None:
+        # Invalidate router only if new chunks were added
+        if any_new and self.router is not None:
             self.router.invalidate()
 
         return results
