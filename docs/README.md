@@ -6,6 +6,10 @@ This folder now separates current design docs from historical material.
 
 - `architecture_design.md` – current architecture overview
 - `benchmarking_guide.md` – which benchmarks to run and how to interpret them
+- current retrieval story:
+  - refined same-space routing for shard-based search
+  - global PCA-64 as the benchmark-backed fast path at current LoTTE scale
+  - dynamic runtime allocation between quality-first and speed-first modes
 - `beir_benchmark.md` – BEIR retrieval benchmark usage
 - `ragbench_e2e.md` – end-to-end QA benchmark usage
 - `coreference_guide.md` – FastCoref + fallback reference resolution

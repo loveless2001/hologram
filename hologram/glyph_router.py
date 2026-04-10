@@ -294,13 +294,15 @@ class GlyphRouter:
 
     def search_routed(self, query_vec: np.ndarray, top_k: int = 5,
                       top_glyphs: int = 2, fallback_global: bool = True,
-                      min_glyph_score: float = 0.0) -> List[Tuple[str, float]]:
+                      min_glyph_score: float = 0.0,
+                      secondary_shard_weight: float = 1.0,
+                      shard2_cutoff_rank: Optional[int] = None) -> List[Tuple[str, float]]:
         """
         Doc-faithful retrieval flow:
         1. Infer p(g|q) via resonance_score (always includes top-1)
         2. For each top glyph: transform query via operator, search shard
         3. Rank by raw within-shard cosine (glyph weight for routing only)
-        4. Deduplicate across shards (keep best score per trace)
+        4. Deduplicate across shards (keep best weighted score per trace)
         5. Global fallback via store trace index if results < top_k
         """
         self._ensure_shards()
@@ -313,7 +315,8 @@ class GlyphRouter:
         # Glyph weight is used for ROUTING (which shards to search), not scoring.
         # Within-shard cosine similarity is the ranking signal.
         best_scores: Dict[str, float] = {}
-        for glyph_id, glyph_weight in glyph_weights.items():
+        shard1_cutoff_score: Optional[float] = None
+        for rank, glyph_id in enumerate(glyph_weights.keys(), start=1):
             shard = self._shards.get(glyph_id)
             op = self._operators.get(glyph_id)
             if shard is None or op is None:
@@ -321,11 +324,19 @@ class GlyphRouter:
 
             transformed_q = op.transform_query(query_vec)
             hits = shard.search(transformed_q, top_k=top_k)
+            shard_weight = 1.0 if rank == 1 else secondary_shard_weight
+
+            if rank == 1 and shard2_cutoff_rank is not None and hits:
+                cutoff_idx = min(max(shard2_cutoff_rank - 1, 0), len(hits) - 1)
+                shard1_cutoff_score = hits[cutoff_idx][1]
 
             for trace_id, cos_sim in hits:
-                # 4. Deduplicate: keep best score per trace (raw cosine, no weight)
-                if trace_id not in best_scores or cos_sim > best_scores[trace_id]:
-                    best_scores[trace_id] = cos_sim
+                if rank > 1 and shard1_cutoff_score is not None and cos_sim < shard1_cutoff_score:
+                    continue
+                weighted_score = cos_sim * shard_weight
+                # 4. Deduplicate: keep best score per trace after optional shard weighting
+                if trace_id not in best_scores or weighted_score > best_scores[trace_id]:
+                    best_scores[trace_id] = weighted_score
 
         # Sort by score
         results = sorted(best_scores.items(), key=lambda x: x[1], reverse=True)
@@ -351,6 +362,8 @@ class GlyphRouter:
         top_glyphs: int = 2,
         fallback_global: bool = True,
         min_glyph_score: float = 0.0,
+        secondary_shard_weight: float = 1.0,
+        shard2_cutoff_rank: Optional[int] = None,
         min_routable_glyphs: int = 2,
         min_traces_per_glyph: int = 3,
         min_total_traces: int = 8,
@@ -370,4 +383,6 @@ class GlyphRouter:
             top_glyphs=top_glyphs,
             fallback_global=fallback_global,
             min_glyph_score=min_glyph_score,
+            secondary_shard_weight=secondary_shard_weight,
+            shard2_cutoff_rank=shard2_cutoff_rank,
         )

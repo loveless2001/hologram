@@ -2,8 +2,9 @@
 """Unit tests for GlyphOperator, GlyphShardIndex, and GlyphRouter."""
 import numpy as np
 import pytest
+from hologram.api import Hologram
 from hologram.glyph_operator import GlyphOperator
-from hologram.glyph_router import GlyphRouter, GlyphShardIndex
+from hologram.glyph_router import GlyphRouter, GlyphShardIndex, RoutingDecision
 from hologram.store import MemoryStore, Trace
 from hologram.glyphs import GlyphRegistry
 
@@ -106,6 +107,16 @@ class TestGlyphShardIndex:
 
 
 class TestGlyphRouter:
+    def test_hologram_init_defaults_to_same_space_router(self):
+        holo = Hologram.init(
+            encoder_mode="hash",
+            use_clip=False,
+            use_gravity=False,
+            auto_ingest_system=False,
+        )
+        assert holo.router is not None
+        assert holo.router._use_projection is False
+
     def test_infer_glyphs(self, multi_domain_setup):
         store, glyphs = multi_domain_setup
         router = GlyphRouter(store, glyphs)
@@ -177,6 +188,65 @@ class TestGlyphRouter:
         )
         for tid, _ in results:
             assert not tid.startswith("glyph:"), f"Got glyph ID in results: {tid}"
+
+    def test_secondary_shard_weight_downweights_non_top_shards(self):
+        store = MemoryStore(vec_dim=DIM)
+        glyphs = GlyphRegistry(store)
+        glyphs.create("g1", title="G1")
+        glyphs.create("g2", title="G2")
+
+        q = _make_biased_vec(DIM, 0, 8, bias_strength=6.0)
+        g1_vec = q.copy()
+        g2_vec = q.copy()
+        g2_vec[0] *= 0.8
+        g2_vec /= (np.linalg.norm(g2_vec) + 1e-8)
+
+        glyphs.attach_trace("g1", Trace(trace_id="g1_doc", kind="text", content="g1", vec=g1_vec))
+        glyphs.attach_trace("g2", Trace(trace_id="g2_doc", kind="text", content="g2", vec=g2_vec))
+
+        router = GlyphRouter(store, glyphs, use_projection=False)
+        inferred = list(router.infer_glyphs(q, top_n=2).keys())
+        assert inferred == ["g1", "g2"]
+
+        unweighted = router.search_routed(q, top_k=2, top_glyphs=2, secondary_shard_weight=1.0)
+        weighted = router.search_routed(q, top_k=2, top_glyphs=2, secondary_shard_weight=0.5)
+
+        assert unweighted[0][0] == "g1_doc"
+        assert weighted[0][0] == "g1_doc"
+        assert weighted[1][1] < unweighted[1][1]
+
+    def test_shard2_cutoff_filters_weak_secondary_hits(self):
+        store = MemoryStore(vec_dim=DIM)
+        glyphs = GlyphRegistry(store)
+        glyphs.create("g1", title="G1")
+        glyphs.create("g2", title="G2")
+
+        q = _make_biased_vec(DIM, 0, 8, bias_strength=6.0)
+        g1_a = q.copy()
+        g1_b = q.copy()
+        g1_b[0] *= 0.98
+        g1_b /= (np.linalg.norm(g1_b) + 1e-8)
+        g2 = q.copy()
+        g2[0] *= 0.1
+        g2[8:16] -= 3.0
+        g2 /= (np.linalg.norm(g2) + 1e-8)
+
+        glyphs.attach_trace("g1", Trace(trace_id="g1_a", kind="text", content="g1_a", vec=g1_a))
+        glyphs.attach_trace("g1", Trace(trace_id="g1_b", kind="text", content="g1_b", vec=g1_b))
+        glyphs.attach_trace("g2", Trace(trace_id="g2_a", kind="text", content="g2_a", vec=g2))
+
+        router = GlyphRouter(store, glyphs, use_projection=False)
+        unfiltered = router.search_routed(q, top_k=3, top_glyphs=2, fallback_global=False)
+        filtered = router.search_routed(
+            q,
+            top_k=3,
+            top_glyphs=2,
+            fallback_global=False,
+            shard2_cutoff_rank=2,
+        )
+
+        assert any(trace_id == "g2_a" for trace_id, _ in unfiltered)
+        assert all(trace_id != "g2_a" for trace_id, _ in filtered)
 
     def test_glyph_affinity_equal_weights(self):
         """glyph_affinity should have equal weights for multi-glyph concepts."""
@@ -251,3 +321,67 @@ class TestGlyphRouter:
         results = router.search_adaptive(q, top_k=3)
         phys_count = sum(1 for tid, _ in results if tid.startswith("phys_"))
         assert phys_count >= 2, f"Expected adaptive routing to use shard path, got {results}"
+
+    def test_search_dynamic_prefers_global_pca_for_small_corpus(self, monkeypatch):
+        holo = Hologram.init(
+            encoder_mode="hash",
+            use_clip=False,
+            use_gravity=False,
+            auto_ingest_system=False,
+        )
+        holo.store.traces = {f"t{i}": None for i in range(10)}
+
+        monkeypatch.setattr(
+            holo,
+            "search_global_pca",
+            lambda query, top_k=5, pca_dim=64: [("pca", 1.0)],
+        )
+
+        strategy, results = holo.search_dynamic("test query", optimize_for="balanced")
+        assert strategy == "global_pca"
+        assert results == [("pca", 1.0)]
+
+    def test_search_dynamic_prefers_routed_for_large_routable_corpus(self, monkeypatch):
+        holo = Hologram.init(
+            encoder_mode="hash",
+            use_clip=False,
+            use_gravity=False,
+            auto_ingest_system=False,
+        )
+        holo.store.traces = {f"t{i}": None for i in range(6000)}
+        monkeypatch.setattr(
+            holo.router,
+            "decide_routing",
+            lambda **kwargs: RoutingDecision(
+                should_route=True,
+                reason="route",
+                total_glyphs=10,
+                routable_glyphs=5,
+                total_traces=6000,
+                min_routable_glyphs=2,
+                min_traces_per_glyph=3,
+                min_total_traces=8,
+            ),
+        )
+        monkeypatch.setattr(
+            holo,
+            "search_routed",
+            lambda query, top_k=5, top_glyphs=2, secondary_shard_weight=1.0, shard2_cutoff_rank=None: [("routed", 1.0)],
+        )
+
+        strategy, results = holo.search_dynamic("test query", optimize_for="speed")
+        assert strategy == "routed"
+        assert results == [("routed", 1.0)]
+
+    def test_search_dynamic_quality_mode_uses_global(self, monkeypatch):
+        holo = Hologram.init(
+            encoder_mode="hash",
+            use_clip=False,
+            use_gravity=False,
+            auto_ingest_system=False,
+        )
+        monkeypatch.setattr(holo, "search_text", lambda query, top_k=5: [("global", 1.0)])
+
+        strategy, results = holo.search_dynamic("test query", optimize_for="quality")
+        assert strategy == "global"
+        assert results == [("global", 1.0)]

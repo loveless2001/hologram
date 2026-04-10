@@ -1,16 +1,18 @@
 # Hologram Architecture
 
-Last updated: 2026-04-10
+Last updated: 2026-04-11
 
 ## Overview
 
-Hologram is currently organized around chunked trace ingestion and glyph-routed retrieval.
+Hologram is currently organized around chunked trace ingestion and two benchmark-backed retrieval paths:
+- refined same-space glyph routing
+- global PCA-compressed retrieval
 
-The default architecture is:
+The current architecture is:
 
-`document -> chunks -> embeddings -> glyph-local traces -> routed retrieval`
+`document -> chunks -> embeddings -> glyph-local traces -> {global | global PCA | routed} retrieval`
 
-The project still contains gravity, symbolic extraction, and diagnostic layers, but those are now secondary to the routed retrieval path rather than the primary top-level story.
+The project still contains gravity, symbolic extraction, and diagnostic layers, but those are now secondary to the retrieval stack above rather than the primary top-level story.
 
 ## Design Priorities
 
@@ -39,7 +41,7 @@ The retrieval system is built around:
 Current routed retrieval flow:
 1. Embed the query
 2. Infer likely glyphs from glyph resonance
-3. Transform the query with each selected glyph operator
+3. By default, keep the query and traces in the original embedding space
 4. Search that glyph's FAISS shard
 5. Merge results across selected glyphs
 6. Optionally fall back to global trace search
@@ -49,9 +51,49 @@ Current operator modes:
 - random orthogonal projection
 - shared discriminant basis learned from glyph centroids
 
-The discriminant basis result is the first meaningful quality win in the current architecture. It should be described accurately as a shared discriminant projection combined with glyph shard routing, not as full per-glyph learned `R_g`.
+Current benchmark-backed routed defaults:
+- `router_use_projection=False` by default
+- routed merge can be refined with:
+  - `secondary_shard_weight`
+  - `shard2_cutoff_rank`
 
-### 3. Deterministic identifiers
+Current routed benchmark result on the mixed-domain LoTTE slice:
+- same-space routed with merge refinements is about `0.894` `NDCG@10` at `~17-18 ms/query`
+
+Important conclusion:
+- operator-projected routed retrieval was the main quality bug
+- same-space shard search is the safe default
+- further gains from routing now come from merge policy, not stronger transforms
+
+### 3. Global compressed retrieval
+
+The current benchmark story also supports a compression-first fast path:
+
+1. Embed the query in the original space
+2. Apply one global PCA basis
+3. Search a compressed FAISS index in `64D`
+
+Current benchmark result on the same LoTTE slice:
+- global `384D`: `0.926` `NDCG@10`, `~98 ms/query`
+- global `PCA-64`: `0.907` `NDCG@10`, `~17 ms/query`
+
+Interpretation:
+- moderate global compression works surprisingly well
+- aggressive compression (`16D`, `32D`) loses too much quality
+- at the current benchmark scale, global PCA-64 is the strongest fast path overall
+
+### 4. Dynamic allocation
+
+Hologram now also exposes a dynamic retrieval policy:
+- `quality` -> full global search
+- `balanced` / `speed` on smaller corpora -> global PCA
+- `balanced` / `speed` on larger routable corpora -> refined routed search
+
+This policy is available as:
+- `Hologram.search_dynamic(...)`
+- `POST /query/dynamic`
+
+### 5. Deterministic identifiers
 
 Persistent auto-generated IDs now use stable digest-based helpers rather than Python `hash()`.
 
@@ -61,7 +103,7 @@ That applies to:
 - chunk `source_hash`
 - stable seeds used by glyph projection logic
 
-### 4. Optional symbolic and physics layers
+### 6. Optional symbolic and physics layers
 
 The repo still includes:
 - gravity-field dynamics
@@ -89,8 +131,10 @@ Key current methods:
 - `load(...)`
 - `add_text(...)`
 - `ingest_document(...)`
+- `search_text(...)`
+- `search_global_pca(...)`
 - `search_routed(...)`
-- `retrieve(...)`
+- `search_dynamic(...)`
 
 ### `hologram/chunking.py`
 
@@ -110,6 +154,12 @@ Defines the retrieval-time transform `T_g(z)` used by routed retrieval. The inte
 
 Owns shard inference, shard build/invalidation, and routed search behavior. It is the center of the current retrieval architecture.
 
+Important current behavior:
+- same-space shards are the default
+- routed merge policy now supports:
+  - shard weighting
+  - shard2 tail filtering
+
 ### `hologram/store.py`
 
 Stores traces and glyphs, and provides base vector search. Routed retrieval builds on top of this storage layer.
@@ -121,6 +171,8 @@ Exposes the main REST surface, including:
 - `/ingest/document`
 - `/query`
 - `/query/routed`
+- `/query/adaptive`
+- `/query/dynamic`
 - `/ingest/code`
 - `/query/code`
 
@@ -139,9 +191,10 @@ Read the system in this order:
 
 1. `api.py` for the top-level lifecycle
 2. `chunking.py` for the default ingestion unit
-3. `glyph_operator.py` and `glyph_router.py` for the main retrieval path
+3. `glyph_operator.py` and `glyph_router.py` for routed retrieval
 4. `store.py` for persistence/search substrate
-5. optional modules only if you need those experiments
+5. `api.py` dynamic/global-PCA methods if you are reasoning about runtime allocation
+6. optional modules only if you need those experiments
 
 ## Legacy Material
 

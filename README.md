@@ -6,7 +6,9 @@ The current design is centered on:
 - chunking documents into deterministic trace units
 - embedding those chunks with MiniLM or other encoders
 - storing traces under glyphs
-- routing queries through glyph-local shard indexes with `GlyphRouter`
+- supporting two benchmark-backed fast retrieval paths:
+  - same-space glyph routing with merge refinements
+  - global PCA-64 compression
 - treating symbolic extraction and gravity-heavy behavior as optional layers, not the default ingestion path
 
 ## Current Design
@@ -23,19 +25,35 @@ Use:
 
 ### Default retrieval path
 
-The main retrieval path is:
+The main routed retrieval path is:
 
-`query -> infer glyph distribution -> transform with GlyphOperator -> search shard indexes -> merge results`
+`query -> infer glyph distribution -> same-space shard search -> weighted/filter merge -> results`
 
 Use:
 - `Hologram.search_routed(...)` for glyph-routed retrieval
 - `POST /query/routed` for the REST equivalent
 
-Global retrieval and probe/gravity retrieval still exist, but they are no longer the primary design story.
+The main compression-first fast path is:
+
+`query -> global PCA-64 projection -> compressed global FAISS search`
+
+Use:
+- `Hologram.search_global_pca(...)` for benchmark-backed compressed global retrieval
+- `Hologram.search_dynamic(...)` or `POST /query/dynamic` to allocate automatically between:
+  - full global search for quality
+  - global PCA for smaller corpora / balanced speed
+  - refined routed search once scale and shard structure justify it
+
+Current benchmark-backed retrieval defaults:
+- same-space routing is the safe routed default; operator projection is now opt-in
+- routed merge quality improves with:
+  - `secondary_shard_weight`
+  - `shard2_cutoff_rank`
+- at the current LoTTE benchmark scale, `global PCA-64` is the strongest fast path overall
 
 ### Optional layers
 
-These modules remain part of the repo, but they are optional or secondary to the routed retrieval path:
+These modules remain part of the repo, but they are optional or secondary to the current retrieval stack:
 - gravity-field simulation in `hologram/gravity.py`
 - symbolic extraction in `hologram/text_utils.py`
 - GLiNER-backed symbolic enrichment when explicitly enabled
@@ -87,6 +105,8 @@ Current API endpoints include:
 - `POST /ingest/document`
 - `POST /query`
 - `POST /query/routed`
+- `POST /query/adaptive`
+- `POST /query/dynamic`
 - `POST /ingest/code`
 - `POST /query/code`
 - `POST /kg/build_batch`
@@ -99,11 +119,17 @@ Current API endpoints include:
 Current benchmark entry points:
 - `tests/benchmark-glyph-routing-vs-global.py` – synthetic routing control
 - `tests/benchmark-glyph-routing-minilm-real-text.py` – real-text MiniLM routing benchmark
+- `scripts/benchmark_lotte_multidomain.py` – mixed-domain LoTTE routing/compression benchmark
 - `scripts/benchmark_beir.py` – external retrieval benchmark
 - `scripts/benchmark_ragbench_e2e.py` – end-to-end QA benchmark
 - `scripts/benchmark_timeqa_e2e.py` and `scripts/benchmark_timeqa_stream.py` – temporal retrieval/drift experiments
 
 Read [docs/benchmarking_guide.md](/home/lenovo/projects/hologram/docs/benchmarking_guide.md) before interpreting latency numbers. Routed benchmarks have a meaningful cold-vs-warm distinction.
+
+Current LoTTE snapshot:
+- global 384D: `0.926` `NDCG@10`, `98 ms/query`
+- global PCA-64: `0.907` `NDCG@10`, `17 ms/query`
+- routed 384D with merge refinements: about `0.894` `NDCG@10`, `17-18 ms/query`
 
 ## Documentation
 

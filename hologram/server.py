@@ -68,6 +68,12 @@ class QueryRequest(BaseModel):
     project: str
     text: str
     top_k: int = 5
+    top_glyphs: int = 2
+    secondary_shard_weight: float = 1.0
+    shard2_cutoff_rank: Optional[int] = None
+    optimize_for: str = "balanced"
+    global_pca_dim: int = 64
+    global_pca_max_traces: int = 5000
 
 class IngestCodeRequest(BaseModel):
     project: str
@@ -339,7 +345,13 @@ async def query_routed(req: QueryRequest):
         )
     try:
         holo = hologram_instances[req.project]
-        results = holo.search_routed(req.text, top_k=req.top_k)
+        results = holo.search_routed(
+            req.text,
+            top_k=req.top_k,
+            top_glyphs=req.top_glyphs,
+            secondary_shard_weight=req.secondary_shard_weight,
+            shard2_cutoff_rank=req.shard2_cutoff_rank,
+        )
         return {
             "query": req.text,
             "results": [
@@ -364,9 +376,52 @@ async def query_adaptive(req: QueryRequest):
         )
     try:
         holo = hologram_instances[req.project]
-        results = holo.search_adaptive(req.text, top_k=req.top_k)
+        results = holo.search_adaptive(
+            req.text,
+            top_k=req.top_k,
+            top_glyphs=req.top_glyphs,
+            secondary_shard_weight=req.secondary_shard_weight,
+            shard2_cutoff_rank=req.shard2_cutoff_rank,
+        )
         return {
             "query": req.text,
+            "results": [
+                {"trace_id": t.trace_id, "content": t.content, "score": round(s, 4)}
+                for t, s in results
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/query/dynamic")
+async def query_dynamic(req: QueryRequest):
+    """
+    Dynamic retrieval policy:
+    - quality: full global search
+    - balanced/speed on smaller corpora: global PCA compression
+    - balanced/speed on larger routable corpora: refined routed retrieval
+    """
+    if req.project not in hologram_instances:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{req.project}' not found. Ingest some data first."
+        )
+    try:
+        holo = hologram_instances[req.project]
+        strategy, results = holo.search_dynamic(
+            req.text,
+            top_k=req.top_k,
+            optimize_for=req.optimize_for,
+            top_glyphs=req.top_glyphs,
+            global_pca_dim=req.global_pca_dim,
+            global_pca_max_traces=req.global_pca_max_traces,
+            secondary_shard_weight=req.secondary_shard_weight,
+            shard2_cutoff_rank=req.shard2_cutoff_rank,
+        )
+        return {
+            "query": req.text,
+            "strategy": strategy,
             "results": [
                 {"trace_id": t.trace_id, "content": t.content, "score": round(s, 4)}
                 for t, s in results

@@ -2,8 +2,9 @@
 from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
-from typing import Any, Optional, List, Tuple
+from typing import Any, Dict, Optional, List, Tuple
 import numpy as np
+import faiss
 
 
 def _stable_id(prefix: str, text: str) -> str:
@@ -38,6 +39,46 @@ from .mg_scorer import MGScore, mg_score
 from .glyph_router import GlyphRouter
 
 
+class _GlobalPCAIndex:
+    """Lazy global PCA index used by dynamic retrieval policy."""
+
+    def __init__(self, store: MemoryStore, pca_dim: int):
+        traces = [
+            trace for trace in store.traces.values()
+            if trace is not None and trace.vec is not None
+        ]
+        if not traces:
+            raise RuntimeError("Global PCA search requires at least one stored trace.")
+
+        mat = np.stack([np.asarray(trace.vec, dtype="float32") for trace in traces], axis=0)
+        self.trace_ids = [str(trace.trace_id) for trace in traces]
+        self.mean = mat.mean(axis=0).astype("float32")
+        centered = mat - self.mean
+
+        _, _, vt = np.linalg.svd(centered.astype("float64"), full_matrices=False)
+        basis_rows = min(int(pca_dim), vt.shape[0])
+        self.basis = vt[:basis_rows].astype("float32")
+
+        projected = centered @ self.basis.T
+        norms = np.linalg.norm(projected, axis=1, keepdims=True) + 1e-8
+        projected = (projected / norms).astype("float32")
+
+        self.index = faiss.IndexFlatIP(projected.shape[1])
+        self.index.add(projected)
+
+    def search(self, query_vec: np.ndarray, top_k: int) -> List[Tuple[str, float]]:
+        projected_q = (np.asarray(query_vec, dtype="float32") - self.mean) @ self.basis.T
+        projected_q /= (np.linalg.norm(projected_q) + 1e-8)
+        k = min(top_k, len(self.trace_ids))
+        scores, indices = self.index.search(projected_q.reshape(1, -1).astype("float32"), k)
+
+        hits: List[Tuple[str, float]] = []
+        for score, idx in zip(scores[0], indices[0]):
+            if 0 <= idx < len(self.trace_ids):
+                hits.append((self.trace_ids[idx], float(score)))
+        return hits
+
+
 @dataclass
 class Hologram:
     """
@@ -54,6 +95,7 @@ class Hologram:
     field: Optional[GravityField] = None
     router: Optional[GlyphRouter] = None
     project: str = "default"
+    _global_pca_cache: Optional[Tuple[int, _GlobalPCAIndex]] = None
 
     # --- Shared encoder/instance setup ---
     @staticmethod
@@ -88,14 +130,26 @@ class Hologram:
         return text_enc, img_enc, store_dim
 
     @classmethod
-    def _build_instance(cls, store, text_enc, img_enc, use_gravity=True,
-                        field=None):
+    def _build_instance(
+        cls,
+        store,
+        text_enc,
+        img_enc,
+        use_gravity=True,
+        field=None,
+        router_use_projection: bool = False,
+    ):
         """Build a Hologram instance from components (shared by init/load)."""
         if field is None and use_gravity:
             field = GravityField(dim=store.vec_dim)
         manifold = LatentManifold(dim=store.vec_dim)
         glyphs_reg = GlyphRegistry(store)
-        router = GlyphRouter(store, glyphs_reg, gravity_field=field)
+        router = GlyphRouter(
+            store,
+            glyphs_reg,
+            gravity_field=field,
+            use_projection=router_use_projection,
+        )
         return cls(
             store=store, glyphs=glyphs_reg,
             text_encoder=text_enc, image_encoder=img_enc,
@@ -122,6 +176,19 @@ class Hologram:
             instance.field.add(cid, vec, tier=2, project="hologram",
                                origin="system_design")
 
+    def _invalidate_search_caches(self) -> None:
+        self._global_pca_cache = None
+        if self.router is not None:
+            self.router.invalidate()
+
+    def _get_global_pca_index(self, pca_dim: int = 64) -> _GlobalPCAIndex:
+        cached = self._global_pca_cache
+        if cached is not None and cached[0] == pca_dim:
+            return cached[1]
+        index = _GlobalPCAIndex(self.store, pca_dim=pca_dim)
+        self._global_pca_cache = (pca_dim, index)
+        return index
+
     # --- Initialization ---
     @classmethod
     def init(
@@ -132,11 +199,18 @@ class Hologram:
         use_gravity: bool = True,
         encoder_mode: str = "minilm",
         auto_ingest_system: bool = True,
+        router_use_projection: bool = False,
     ):
         text_enc, img_enc, store_dim = cls._resolve_encoders(
             encoder_mode, VECTOR_DIM, use_clip, model_name, pretrained)
         store = MemoryStore(vec_dim=store_dim)
-        instance = cls._build_instance(store, text_enc, img_enc, use_gravity)
+        instance = cls._build_instance(
+            store,
+            text_enc,
+            img_enc,
+            use_gravity,
+            router_use_projection=router_use_projection,
+        )
         
         # NEW: Initialize Normalization Pipeline
         from .normalization import NormalizationPipeline
@@ -255,8 +329,7 @@ class Hologram:
             self.field.sim.step_dynamics()
 
         # Invalidate glyph router shards (trace membership changed)
-        if self.router is not None:
-            self.router.invalidate()
+        self._invalidate_search_caches()
 
         return trace_id
 
@@ -269,8 +342,7 @@ class Hologram:
         self.glyphs.attach_trace(glyph_id, tr)
         if self.field:
             self.field.add(trace_id, vec)
-        if self.router is not None:
-            self.router.invalidate()
+        self._invalidate_search_caches()
         return trace_id
 
     def ingest_document(self, glyph_id: str, text: str,
@@ -350,8 +422,8 @@ class Hologram:
                             "char_end": chunk.char_end})
 
         # Invalidate router only if new chunks were added
-        if any_new and self.router is not None:
-            self.router.invalidate()
+        if any_new:
+            self._invalidate_search_caches()
 
         return results
 
@@ -401,7 +473,24 @@ class Hologram:
         qv = self.manifold.align_text(query, self.text_encoder)
         return self.glyphs.search_across(qv, top_k=top_k)
 
-    def search_routed(self, query: str, top_k: int = 5, top_glyphs: int = 2) -> List[Tuple[Trace, float]]:
+    def search_global_pca(self, query: str, top_k: int = 5, pca_dim: int = 64) -> List[Tuple[Trace, float]]:
+        qv = self.manifold.align_text(query, self.text_encoder)
+        hits = self._get_global_pca_index(pca_dim=pca_dim).search(qv, top_k=top_k)
+        out = []
+        for trace_id, score in hits:
+            t = self.store.get_trace(trace_id)
+            if t:
+                out.append((t, score))
+        return out
+
+    def search_routed(
+        self,
+        query: str,
+        top_k: int = 5,
+        top_glyphs: int = 2,
+        secondary_shard_weight: float = 1.0,
+        shard2_cutoff_rank: Optional[int] = None,
+    ) -> List[Tuple[Trace, float]]:
         """Glyph-routed retrieval: infer glyphs → search shards → merge.
 
         Returns same format as search_text() for easy A/B comparison.
@@ -411,7 +500,13 @@ class Hologram:
                 self.manifold.align_text(query, self.text_encoder), top_k=top_k)
 
         qv = self.manifold.align_text(query, self.text_encoder)
-        hits = self.router.search_routed(qv, top_k=top_k, top_glyphs=top_glyphs)
+        hits = self.router.search_routed(
+            qv,
+            top_k=top_k,
+            top_glyphs=top_glyphs,
+            secondary_shard_weight=secondary_shard_weight,
+            shard2_cutoff_rank=shard2_cutoff_rank,
+        )
         # Convert (trace_id, score) → (Trace, score) to match search_text format
         out = []
         for trace_id, score in hits:
@@ -421,19 +516,91 @@ class Hologram:
         return out
 
     def search_adaptive(self, query: str, top_k: int = 5,
-                        top_glyphs: int = 2) -> List[Tuple[Trace, float]]:
+                        top_glyphs: int = 2,
+                        secondary_shard_weight: float = 1.0,
+                        shard2_cutoff_rank: Optional[int] = None) -> List[Tuple[Trace, float]]:
         """Adaptive retrieval: stay global unless shard population warrants routing."""
         qv = self.manifold.align_text(query, self.text_encoder)
         if self.router is None:
             return self.glyphs.search_across(qv, top_k=top_k)
 
-        hits = self.router.search_adaptive(qv, top_k=top_k, top_glyphs=top_glyphs)
+        hits = self.router.search_adaptive(
+            qv,
+            top_k=top_k,
+            top_glyphs=top_glyphs,
+            secondary_shard_weight=secondary_shard_weight,
+            shard2_cutoff_rank=shard2_cutoff_rank,
+        )
         out = []
         for trace_id, score in hits:
             t = self.store.get_trace(trace_id)
             if t:
                 out.append((t, score))
         return out
+
+    def choose_dynamic_strategy(
+        self,
+        optimize_for: str = "balanced",
+        global_pca_max_traces: int = 5000,
+        min_routable_glyphs: int = 2,
+        min_traces_per_glyph: int = 3,
+        min_total_traces: int = 8,
+    ) -> str:
+        """Choose a retrieval path based on current scale and optimization target.
+
+        Policy:
+        - `quality`: use full global search
+        - `speed`/`balanced`: use global PCA while corpus is small enough;
+          switch to routed retrieval once scale exceeds the PCA threshold and
+          glyph routing is actually viable.
+        """
+        if optimize_for not in {"quality", "balanced", "speed"}:
+            raise ValueError("optimize_for must be one of: quality, balanced, speed")
+
+        if optimize_for == "quality":
+            return "global"
+
+        total_traces = len(self.store.traces)
+        if total_traces <= global_pca_max_traces:
+            return "global_pca"
+
+        if self.router is None:
+            return "global_pca"
+
+        decision = self.router.decide_routing(
+            min_routable_glyphs=min_routable_glyphs,
+            min_traces_per_glyph=min_traces_per_glyph,
+            min_total_traces=min_total_traces,
+        )
+        return "routed" if decision.should_route else "global_pca"
+
+    def search_dynamic(
+        self,
+        query: str,
+        top_k: int = 5,
+        optimize_for: str = "balanced",
+        top_glyphs: int = 2,
+        global_pca_dim: int = 64,
+        global_pca_max_traces: int = 5000,
+        secondary_shard_weight: float = 0.9,
+        shard2_cutoff_rank: Optional[int] = 7,
+    ) -> Tuple[str, List[Tuple[Trace, float]]]:
+        """Dynamically choose between quality-first and speed-first retrieval paths."""
+        strategy = self.choose_dynamic_strategy(
+            optimize_for=optimize_for,
+            global_pca_max_traces=global_pca_max_traces,
+        )
+        if strategy == "global":
+            return strategy, self.search_text(query, top_k=top_k)
+        if strategy == "global_pca":
+            return strategy, self.search_global_pca(query, top_k=top_k, pca_dim=global_pca_dim)
+        return strategy, self.search_routed(
+            query,
+            top_k=top_k,
+            top_glyphs=top_glyphs,
+            secondary_shard_weight=secondary_shard_weight,
+            shard2_cutoff_rank=shard2_cutoff_rank,
+        )
 
     def search_image_path(self, path: str, top_k: int = 5):
         # Use manifold for alignment
@@ -732,6 +899,7 @@ class Hologram:
         use_gravity: bool = True,
         encoder_mode: str = "minilm",
         auto_ingest_system: bool = True,  # NEW: Auto-load system concepts
+        router_use_projection: bool = False,
     ):
         store = MemoryStore.load(path)
         text_enc, img_enc, _ = cls._resolve_encoders(
@@ -745,7 +913,13 @@ class Hologram:
         elif use_gravity:
             field = GravityField(dim=store.vec_dim)
 
-        instance = cls._build_instance(store, text_enc, img_enc,
-                                       use_gravity, field)
+        instance = cls._build_instance(
+            store,
+            text_enc,
+            img_enc,
+            use_gravity,
+            field,
+            router_use_projection=router_use_projection,
+        )
         cls._auto_ingest_system(instance, auto_ingest_system, use_gravity, text_enc)
         return instance
