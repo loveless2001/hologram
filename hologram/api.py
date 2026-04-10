@@ -270,19 +270,37 @@ class Hologram:
     def ingest_document(self, glyph_id: str, text: str,
                         sentences_per_chunk: int = 3, overlap: int = 1,
                         tier: int = 1, origin: str = "kb",
+                        normalize: bool = True,
                         ) -> List[dict]:
         """Chunk text, batch embed, and store as traces in one pass.
 
         Higher-level alternative to add_text() for bulk document ingestion.
+        Applies normalization + coreference by default (same quality as add_text).
         Returns list of dicts with trace_id and chunk metadata.
+
+        Args:
+            normalize: If True, run normalization + coref on each chunk before
+                       embedding. Set False for pre-cleaned text.
         """
         chunks = chunk_text(text, sentences_per_chunk=sentences_per_chunk,
                             overlap=overlap)
         if not chunks:
             return []
 
-        # Batch embed all chunk texts
-        chunk_texts = [c.text for c in chunks]
+        # Apply normalization + coref per chunk if requested
+        chunk_texts = []
+        for c in chunks:
+            ct = c.text
+            if normalize:
+                ct, _ = normalize_text(ct, store=self.store,
+                                       encoder=self.text_encoder)
+                from .config import Config
+                from .coref import resolve
+                if Config.coref.ENABLE_COREF:
+                    ct, _ = resolve(ct)
+            chunk_texts.append(ct)
+
+        # Batch embed all (possibly normalized) chunk texts
         has_batch = hasattr(self.text_encoder, "encode_batch")
         if has_batch:
             vecs = self.text_encoder.encode_batch(chunk_texts)
@@ -292,11 +310,11 @@ class Hologram:
             ])
 
         results = []
-        for chunk, vec in zip(chunks, vecs):
+        for chunk, ct, vec in zip(chunks, chunk_texts, vecs):
             vec = vec / (np.linalg.norm(vec) + 1e-8)  # normalize
             tid = f"chunk:{chunk.source_hash}:{chunk.index}"
             tr = Trace(
-                trace_id=tid, kind="chunk", content=chunk.text, vec=vec,
+                trace_id=tid, kind="chunk", content=ct, vec=vec,
                 meta={
                     "chunk_index": chunk.index,
                     "char_start": chunk.char_start,

@@ -1,6 +1,8 @@
 # hologram/store.py
 import json
 import threading
+import os
+import ctypes
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Any
@@ -55,8 +57,20 @@ class VectorIndex:
         self.use_gpu = False
         if use_gpu:
             try:
-                # Check if GPU functions exist
-                if hasattr(faiss, 'StandardGpuResources') and hasattr(faiss, 'index_cpu_to_gpu'):
+                # Guard FAISS GPU probing with a safe CUDA driver init.
+                # Some FAISS builds can abort when probing unsupported CUDA paths.
+                cuda_ok = False
+                try:
+                    libcuda = ctypes.CDLL("libcuda.so.1")
+                    cu_init = libcuda.cuInit
+                    cu_init.argtypes = [ctypes.c_uint]
+                    cu_init.restype = ctypes.c_int
+                    cuda_ok = (cu_init(0) == 0)
+                except Exception:
+                    cuda_ok = False
+
+                # Check if GPU functions exist and CUDA driver is actually usable
+                if cuda_ok and hasattr(faiss, 'StandardGpuResources') and hasattr(faiss, 'index_cpu_to_gpu'):
                     # Create CPU index first
                     cpu_index = faiss.IndexFlatIP(dim)
                     
@@ -66,9 +80,9 @@ class VectorIndex:
                     self.use_gpu = True
                     print(f"[FAISS] Using GPU backend")
                 else:
-                    # GPU functions not available (CPU-only build)
+                    # GPU functions unavailable, or CUDA driver not usable here
                     self.index = faiss.IndexFlatIP(dim)
-                    print("[FAISS] GPU functions not available, using CPU backend")
+                    print("[FAISS] GPU unavailable in this environment, using CPU backend")
             except Exception as e:
                 # GPU initialization failed (no GPU, CUDA issues, etc.)
                 self.index = faiss.IndexFlatIP(dim)
@@ -118,8 +132,11 @@ class MemoryStore:
 
     # --- Trace operations ---
     def add_trace(self, t: Trace):
+        is_new = t.trace_id not in self.traces
         self.traces[t.trace_id] = t
-        self.index.upsert(t.trace_id, t.vec)
+        if is_new:
+            # Only add to FAISS index for new traces (avoids duplicate entries)
+            self.index.upsert(t.trace_id, t.vec)
         # Pass text content to gravity sim for negation detection
         text_for_negation = t.content if t.kind == "text" else None
         self.sim.add_concept(t.trace_id, text=text_for_negation, vec=t.vec)
