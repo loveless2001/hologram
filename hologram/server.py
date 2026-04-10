@@ -296,7 +296,8 @@ async def ingest_document(req: IngestDocumentRequest):
     """
     try:
         holo = get_or_create_hologram(req.project)
-        glyph_id = req.glyph_id or f"doc:{abs(hash(req.text)) % 10**10}"
+        import hashlib as _hlib
+        glyph_id = req.glyph_id or f"doc:{_hlib.blake2b(req.text.encode('utf-8'), digest_size=8).hexdigest()}"
 
         # Ensure glyph exists
         if holo.store.get_glyph(glyph_id) is None:
