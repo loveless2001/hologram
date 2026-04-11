@@ -98,6 +98,19 @@ class IngestDocumentRequest(BaseModel):
     normalize: bool = True
 
 
+class IngestFileRequest(BaseModel):
+    project: str
+    path: str
+    glyph_id: Optional[str] = None
+    sentences_per_chunk: int = 3
+    overlap: int = 1
+    tier: int = TIER_DOMAIN
+    origin: str = "kb"
+    normalize: bool = True
+    ingest_images: bool = True
+    image_output_dir: Optional[str] = None
+
+
 class KGBuildRequest(BaseModel):
     project: str
     batch_id: str
@@ -325,6 +338,43 @@ async def ingest_document(req: IngestDocumentRequest):
             "glyph_id": glyph_id,
             "chunks_ingested": len(results),
             "chunks": results,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ingest/file")
+async def ingest_file(req: IngestFileRequest):
+    """
+    Parse a supported document file and ingest extracted text/images.
+    Currently supports PDF files through the parser layer.
+    """
+    try:
+        holo = get_or_create_hologram(req.project)
+        import hashlib as _hlib
+        glyph_id = req.glyph_id or f"doc:{_hlib.blake2b(req.path.encode('utf-8'), digest_size=8).hexdigest()}"
+
+        if holo.store.get_glyph(glyph_id) is None:
+            holo.glyphs.create(glyph_id, title=glyph_id)
+
+        result = holo.ingest_file(
+            glyph_id=glyph_id,
+            path=req.path,
+            sentences_per_chunk=req.sentences_per_chunk,
+            overlap=req.overlap,
+            tier=req.tier,
+            origin=req.origin,
+            normalize=req.normalize,
+            ingest_images=req.ingest_images,
+            image_output_dir=req.image_output_dir,
+        )
+        return {
+            "status": "success",
+            "project": req.project,
+            "glyph_id": glyph_id,
+            **result,
         }
     except Exception as e:
         import traceback

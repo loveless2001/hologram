@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, List, Tuple
+from pathlib import Path
 import numpy as np
 import faiss
 
@@ -37,6 +38,7 @@ from .retrieval import extract_local_field
 from .smi import MemoryPacket
 from .mg_scorer import MGScore, mg_score
 from .glyph_router import GlyphRouter
+from .parsers import ParsedDocument, parse_pdf
 
 
 class _GlobalPCAIndex:
@@ -349,6 +351,7 @@ class Hologram:
                         sentences_per_chunk: int = 3, overlap: int = 1,
                         tier: int = 1, origin: str = "kb",
                         normalize: bool = True,
+                        base_meta: Optional[Dict[str, object]] = None,
                         ) -> List[dict]:
         """Chunk text, batch embed, and store as traces in one pass.
 
@@ -392,6 +395,7 @@ class Hologram:
         # Changed document → new source_hash → new IDs → ingests as new.
         results = []
         any_new = False
+        inherited_meta = dict(base_meta or {})
         for chunk, ct, vec in zip(chunks, chunk_texts, vecs):
             tid = f"chunk:{chunk.source_hash}:{chunk.index}"
             if self.store.get_trace(tid) is not None:
@@ -404,6 +408,7 @@ class Hologram:
             tr = Trace(
                 trace_id=tid, kind="chunk", content=ct, vec=vec,
                 meta={
+                    **inherited_meta,
                     "chunk_index": chunk.index,
                     "char_start": chunk.char_start,
                     "char_end": chunk.char_end,
@@ -426,6 +431,119 @@ class Hologram:
             self._invalidate_search_caches()
 
         return results
+
+    def ingest_parsed_document(
+        self,
+        glyph_id: str,
+        parsed: ParsedDocument,
+        sentences_per_chunk: int = 3,
+        overlap: int = 1,
+        tier: int = 1,
+        origin: str = "kb",
+        normalize: bool = True,
+        ingest_images: bool = True,
+    ) -> Dict[str, object]:
+        """Ingest a parsed document into text chunks and optional image traces."""
+        if self.store.get_glyph(glyph_id) is None:
+            self.glyphs.create(glyph_id, title=glyph_id)
+
+        all_chunks: List[dict] = []
+        image_traces: List[dict] = []
+        for page in parsed.pages:
+            page_meta = {
+                "source_doc": parsed.doc_id,
+                "source_path": parsed.source_path,
+                "page_number": page.page_number,
+                **parsed.metadata,
+                **page.metadata,
+            }
+            if page.text.strip():
+                chunks = self.ingest_document(
+                    glyph_id=glyph_id,
+                    text=page.text,
+                    sentences_per_chunk=sentences_per_chunk,
+                    overlap=overlap,
+                    tier=tier,
+                    origin=origin,
+                    normalize=normalize,
+                    base_meta=page_meta,
+                )
+                all_chunks.extend(chunks)
+
+            if ingest_images:
+                for image in page.images:
+                    image_trace_id = self.add_image_path(
+                        glyph_id,
+                        image.path,
+                        trace_id=f"image:{parsed.doc_id}:{page.page_number}:{image.image_index}",
+                        source_doc=parsed.doc_id,
+                        source_path=parsed.source_path,
+                        page_number=page.page_number,
+                        figure_id=f"{parsed.doc_id}:p{page.page_number}:img{image.image_index}",
+                        bbox=image.bbox,
+                        caption_text=image.caption_text,
+                        **image.metadata,
+                    )
+                    image_traces.append(
+                        {
+                            "trace_id": image_trace_id,
+                            "path": image.path,
+                            "page_number": page.page_number,
+                            "image_index": image.image_index,
+                        }
+                    )
+
+        return {
+            "doc_id": parsed.doc_id,
+            "pages_ingested": len(parsed.pages),
+            "chunks": all_chunks,
+            "images": image_traces,
+        }
+
+    def ingest_file(
+        self,
+        glyph_id: str,
+        path: str,
+        sentences_per_chunk: int = 3,
+        overlap: int = 1,
+        tier: int = 1,
+        origin: str = "kb",
+        normalize: bool = True,
+        ingest_images: bool = True,
+        image_output_dir: Optional[str] = None,
+    ) -> Dict[str, object]:
+        """Parse a supported document file and ingest it into the current glyph."""
+        file_path = Path(path).expanduser().resolve()
+        suffix = file_path.suffix.lower()
+
+        if suffix == ".pdf":
+            parsed = parse_pdf(
+                str(file_path),
+                image_output_dir=image_output_dir,
+                extract_images=ingest_images,
+            )
+        elif suffix == ".docx":
+            from hologram.parsers import parse_docx
+            parsed = parse_docx(
+                str(file_path),
+                image_output_dir=image_output_dir,
+                extract_images=ingest_images,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported file type for ingest_file: {suffix or '<no extension>'}"
+            )
+
+        return self.ingest_parsed_document(
+            glyph_id=glyph_id,
+            parsed=parsed,
+            sentences_per_chunk=sentences_per_chunk,
+            overlap=overlap,
+            tier=tier,
+            origin=origin,
+            normalize=normalize,
+            ingest_images=ingest_images,
+        )
 
     def ingest_code(self, file_path: str) -> int:
         """
