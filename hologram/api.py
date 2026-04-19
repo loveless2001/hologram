@@ -2,7 +2,7 @@
 from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from pathlib import Path
 import numpy as np
 import faiss
@@ -590,6 +590,95 @@ class Hologram:
         # Use manifold for alignment
         qv = self.manifold.align_text(query, self.text_encoder)
         return self.glyphs.search_across(qv, top_k=top_k)
+
+    def search_scoped(
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
+        glyph_ids: Optional[List[str]] = None,
+        doc_ids: Optional[List[str]] = None,
+        trace_filter: Optional[Callable[[Trace], bool]] = None,
+        mode: str = "dynamic",
+        top_glyphs: int = 2,
+        global_pca_dim: int = 64,
+        secondary_shard_weight: float = 0.9,
+        shard2_cutoff_rank: Optional[int] = 7,
+    ) -> List[Tuple[Trace, float]]:
+        """Search with optional shard/document filtering.
+
+        When no scope filters are provided, this delegates to the existing
+        retrieval modes. Once glyph/doc/trace filters are present, it performs
+        an exact cosine search across the filtered candidate set instead of
+        taking a small global top-k and filtering it afterward.
+        """
+        if mode not in {"global", "routed", "dynamic", "global_pca"}:
+            raise ValueError(
+                "mode must be one of: global, routed, dynamic, global_pca"
+            )
+
+        qv = self.manifold.align_text(query, self.text_encoder).astype("float32")
+        qv /= (np.linalg.norm(qv) + 1e-8)
+
+        glyph_scope = [gid for gid in (glyph_ids or []) if gid]
+        doc_scope = [doc_id for doc_id in (doc_ids or []) if doc_id]
+        has_scope = bool(glyph_scope or doc_scope or trace_filter is not None)
+
+        if not has_scope:
+            if mode == "global":
+                return self.search_text(query, top_k=top_k)
+            if mode == "routed":
+                return self.search_routed(
+                    query,
+                    top_k=top_k,
+                    top_glyphs=top_glyphs,
+                    secondary_shard_weight=secondary_shard_weight,
+                    shard2_cutoff_rank=shard2_cutoff_rank,
+                )
+            if mode == "global_pca":
+                return self.search_global_pca(
+                    query,
+                    top_k=top_k,
+                    pca_dim=global_pca_dim,
+                )
+            _, results = self.search_dynamic(
+                query,
+                top_k=top_k,
+                top_glyphs=top_glyphs,
+                global_pca_dim=global_pca_dim,
+                secondary_shard_weight=secondary_shard_weight,
+                shard2_cutoff_rank=shard2_cutoff_rank,
+            )
+            return results
+
+        candidate_ids: Set[str]
+        if glyph_scope:
+            candidate_ids = set()
+            for glyph_id in glyph_scope:
+                glyph = self.store.get_glyph(glyph_id)
+                if glyph is not None:
+                    candidate_ids.update(glyph.trace_ids)
+        else:
+            candidate_ids = set(self.store.traces.keys())
+
+        doc_scope_set = set(doc_scope) if doc_scope else None
+        results: List[Tuple[Trace, float]] = []
+        for trace_id in candidate_ids:
+            trace = self.store.get_trace(trace_id)
+            if trace is None or trace.vec is None:
+                continue
+            if doc_scope_set is not None and trace.meta.get("source_doc") not in doc_scope_set:
+                continue
+            if trace_filter is not None and not trace_filter(trace):
+                continue
+
+            vec = np.asarray(trace.vec, dtype="float32")
+            vec /= (np.linalg.norm(vec) + 1e-8)
+            score = float(np.dot(qv, vec))
+            results.append((trace, score))
+
+        results.sort(key=lambda item: item[1], reverse=True)
+        return results[:top_k]
 
     def search_global_pca(self, query: str, top_k: int = 5, pca_dim: int = 64) -> List[Tuple[Trace, float]]:
         qv = self.manifold.align_text(query, self.text_encoder)

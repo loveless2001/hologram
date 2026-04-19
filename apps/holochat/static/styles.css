@@ -1,0 +1,242 @@
+:root {
+  --bg: #f4efe6;
+  --panel: rgba(255, 252, 245, 0.82);
+  --panel-strong: rgba(255, 248, 236, 0.96);
+  --ink: #1b2430;
+  --muted: #5f655d;
+  --accent: #0d7c66;
+  --accent-strong: #064e3b;
+  --accent-soft: #d4efe7;
+  --signal: #bf5b2c;
+  --line: rgba(27, 36, 48, 0.12);
+  --shadow: 0 22px 48px rgba(80, 52, 27, 0.14);
+  --radius-lg: 26px;
+  --radius-md: 18px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Avenir Next", "Futura", "Trebuchet MS", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(255, 187, 93, 0.22), transparent 26rem),
+    radial-gradient(circle at bottom right, rgba(13, 124, 102, 0.2), transparent 28rem),
+    linear-gradient(135deg, #f7f2e8 0%, #efe7db 44%, #f4efe6 100%);
+}
+
+.page-shell {
+  display: grid;
+  grid-template-columns: minmax(18rem, 23rem) minmax(0, 1fr);
+  gap: 1.5rem;
+  padding: 1.5rem;
+  min-height: 100vh;
+}
+
+.control-panel,
+.composer-card,
+.history-card {
+  backdrop-filter: blur(16px);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.control-panel {
+  border-radius: var(--radius-lg);
+  padding: 1.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.panel-heading h1,
+.composer-header h2,
+.section-heading h2,
+.panel-card h2 {
+  margin: 0;
+  font-family: Georgia, "Iowan Old Style", serif;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.eyebrow {
+  margin: 0 0 0.35rem;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--signal);
+}
+
+.subhead,
+.status-line,
+.route-meta,
+.citation-meta,
+.empty-state {
+  color: var(--muted);
+}
+
+.field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.field span {
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  border: 1px solid rgba(27, 36, 48, 0.12);
+  border-radius: 14px;
+  padding: 0.9rem 1rem;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
+  font: inherit;
+}
+
+.field input:focus,
+.field textarea:focus {
+  outline: 2px solid rgba(13, 124, 102, 0.22);
+  border-color: rgba(13, 124, 102, 0.4);
+}
+
+.chat-stage {
+  display: grid;
+  gap: 1.5rem;
+  min-width: 0;
+}
+
+.composer-card,
+.history-card,
+.panel-card {
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+}
+
+.panel-card {
+  background: var(--panel-strong);
+}
+
+.composer-header,
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.primary-button,
+.ghost-button {
+  border: none;
+  border-radius: 999px;
+  padding: 0.85rem 1.2rem;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.primary-button {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+  color: #f4fff9;
+  box-shadow: 0 12px 26px rgba(6, 78, 59, 0.24);
+}
+
+.ghost-button {
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--ink);
+  border: 1px solid rgba(27, 36, 48, 0.1);
+}
+
+.primary-button:hover,
+.ghost-button:hover {
+  transform: translateY(-1px);
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(18rem, 0.8fr);
+  gap: 1.5rem;
+}
+
+.history-list,
+.citations-list {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.message-card,
+.citation-card,
+.route-panel {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  padding: 0.95rem 1rem;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.message-card.user {
+  background: rgba(212, 239, 231, 0.76);
+}
+
+.message-card.assistant {
+  background: rgba(255, 244, 228, 0.82);
+}
+
+.message-meta,
+.citation-meta {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.45rem;
+}
+
+.message-body,
+.citation-body,
+.route-intent {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.route-panel.empty,
+.empty-state {
+  font-style: italic;
+}
+
+.route-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.8rem;
+}
+
+.route-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.45rem 0.7rem;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+@media (max-width: 980px) {
+  .page-shell,
+  .history-grid {
+    grid-template-columns: 1fr;
+  }
+}

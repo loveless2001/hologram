@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Holochat</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="control-panel">
+        <div class="panel-heading">
+          <p class="eyebrow">Phase 06</p>
+          <h1>Holochat</h1>
+          <p class="subhead">
+            Thin UI over the router and scoped-retrieval backend.
+          </p>
+        </div>
+
+        <label class="field">
+          <span>Project</span>
+          <input id="project-input" type="text" value="demo" />
+        </label>
+
+        <label class="field">
+          <span>Session ID</span>
+          <input id="session-input" type="text" placeholder="auto-generated on first send" />
+        </label>
+
+        <label class="field">
+          <span>Active Document</span>
+          <input id="active-doc-input" type="text" placeholder="doc_a.pdf" />
+        </label>
+
+        <label class="field">
+          <span>Selected Documents</span>
+          <input id="selected-docs-input" type="text" placeholder="doc_a.pdf, doc_b.pdf" />
+        </label>
+
+        <label class="field">
+          <span>Top K</span>
+          <input id="top-k-input" type="number" min="1" max="10" value="5" />
+        </label>
+
+        <div class="panel-card">
+          <h2>Latest Route</h2>
+          <div id="route-panel" class="route-panel empty">No decision yet.</div>
+        </div>
+
+        <div class="panel-card">
+          <h2>Status</h2>
+          <p id="status-line" class="status-line">Ready.</p>
+        </div>
+      </aside>
+
+      <main class="chat-stage">
+        <section class="composer-card">
+          <div class="composer-header">
+            <div>
+              <p class="eyebrow">Request</p>
+              <h2>Chat Console</h2>
+            </div>
+            <div class="actions">
+              <button id="route-button" class="ghost-button" type="button">Preview Route</button>
+              <button id="send-button" class="primary-button" type="button">Send</button>
+            </div>
+          </div>
+
+          <label class="field">
+            <span>Message</span>
+            <textarea
+              id="message-input"
+              rows="5"
+              placeholder="Ask a question about the corpus, a selected document, or the current session."
+            ></textarea>
+          </label>
+        </section>
+
+        <section class="history-grid">
+          <article class="history-card">
+            <div class="section-heading">
+              <p class="eyebrow">Conversation</p>
+              <h2>History</h2>
+            </div>
+            <div id="history-list" class="history-list">
+              <p class="empty-state">Messages will appear here after you preview or send.</p>
+            </div>
+          </article>
+
+          <article class="history-card">
+            <div class="section-heading">
+              <p class="eyebrow">Grounding</p>
+              <h2>Citations</h2>
+            </div>
+            <div id="citations-list" class="citations-list">
+              <p class="empty-state">Grounded traces will appear here.</p>
+            </div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+  </html>
